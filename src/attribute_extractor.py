@@ -274,6 +274,11 @@ class AttributeExtractor:
         elif re.search(r"\bmetal\s*shield(?:ed)?\b|\bzz\b", text, re.I):
             models["seal_type"] = "Metal Shielded (ZZ)"
 
+        # Variant Tag (e.g. Variant 01 .. Variant 20)
+        m_var = re.search(r"\b(Variant\s+\d+)\b", text, re.I)
+        if m_var:
+            models["variant"] = m_var.group(1).title()
+
         # Misc Part No
         m_misc = self.RE_MISC_PART_NO.search(text)
         if m_misc and "part_number" not in models:
@@ -389,9 +394,13 @@ class AttributeExtractor:
                 conflicts.append(f"Pressure Class Conflict: Class {pca} vs Class {pcb}")
                 return 0.0, matches, conflicts
 
-        # 2. Hard Conflict Check: Conductor Material (Aluminium vs Copper)
-        ca = attrs_a.get("electrical", {}).get("conductor")
-        cb = attrs_b.get("electrical", {}).get("conductor")
+        # 2. Hard Conflict Check: Electrical Conductor & Specs
+        elec_a = attrs_a.get("electrical", {})
+        elec_b = attrs_b.get("electrical", {})
+
+        # Conductor Material (Aluminium vs Copper)
+        ca = elec_a.get("conductor")
+        cb = elec_b.get("conductor")
         if ca and cb:
             if ca == cb:
                 matches.append(f"Conductor match: {ca}")
@@ -399,18 +408,121 @@ class AttributeExtractor:
                 conflicts.append(f"Conductor Conflict: {ca} vs {cb}")
                 return 0.0, matches, conflicts
 
-        # 3. Hard Conflict Check: Bearing Clearance (e.g. C3 vs None)
-        cl_a = attrs_a.get("models", {}).get("clearance")
-        cl_b = attrs_b.get("models", {}).get("clearance")
+        # Voltage (11kV vs 1.1kV vs 33kV vs 415V)
+        va = elec_a.get("voltage")
+        vb = elec_b.get("voltage")
+        if va and vb:
+            if va == vb:
+                matches.append(f"Voltage match: {va}")
+            else:
+                conflicts.append(f"Voltage Conflict: {va} vs {vb}")
+                return 0.0, matches, conflicts
+
+        # Power (kW / HP / MVA)
+        pkw_a = elec_a.get("power_kw")
+        pkw_b = elec_b.get("power_kw")
+        if pkw_a and pkw_b:
+            if abs(pkw_a - pkw_b) < 0.1:
+                matches.append(f"Power match: {pkw_a}kW")
+            else:
+                conflicts.append(f"Power Conflict: {pkw_a}kW vs {pkw_b}kW")
+                return 0.0, matches, conflicts
+
+        php_a = elec_a.get("power_hp")
+        php_b = elec_b.get("power_hp")
+        if php_a and php_b:
+            if abs(php_a - php_b) < 0.1:
+                matches.append(f"Power match: {php_a}HP")
+            else:
+                conflicts.append(f"Power Conflict: {php_a}HP vs {php_b}HP")
+                return 0.0, matches, conflicts
+
+        # Cable Cores & sqmm
+        sq_a = elec_a.get("cable_sqmm")
+        sq_b = elec_b.get("cable_sqmm")
+        if sq_a and sq_b:
+            if abs(sq_a - sq_b) < 0.1:
+                matches.append(f"Cable cross-section match: {sq_a} sqmm")
+            else:
+                conflicts.append(f"Cable cross-section Conflict: {sq_a} sqmm vs {sq_b} sqmm")
+                return 0.0, matches, conflicts
+
+        cr_a = elec_a.get("cable_cores")
+        cr_b = elec_b.get("cable_cores")
+        if cr_a and cr_b:
+            if cr_a == cr_b:
+                matches.append(f"Cable cores match: {cr_a}C")
+            else:
+                conflicts.append(f"Cable cores Conflict: {cr_a}C vs {cr_b}C")
+                return 0.0, matches, conflicts
+
+        # 3. Hard Conflict Check: Component & Model Identifiers
+        mod_a = attrs_a.get("models", {})
+        mod_b = attrs_b.get("models", {})
+
+        # Bearing clearance (e.g. C3 vs Normal)
+        cl_a = mod_a.get("clearance")
+        cl_b = mod_b.get("clearance")
         if cl_a != cl_b:
             if cl_a or cl_b:
                 conflicts.append(f"Clearance difference: {cl_a or 'Normal'} vs {cl_b or 'Normal'}")
+                return 0.0, matches, conflicts
 
-        # 4. Dimension Matching
+        # Part / Model Number (e.g. 22220 vs 22316 vs 6312)
+        pn_a = mod_a.get("part_number")
+        pn_b = mod_b.get("part_number")
+        if pn_a and pn_b:
+            if pn_a == pn_b:
+                matches.append(f"Part/Model number match: {pn_a}")
+            else:
+                conflicts.append(f"Part/Model number Conflict: {pn_a} vs {pn_b}")
+                return 0.0, matches, conflicts
+
+        # Variant Conflict (e.g. Variant 01 vs Variant 02 or Variant vs Base)
+        var_a = mod_a.get("variant")
+        var_b = mod_b.get("variant")
+        if var_a != var_b:
+            if var_a or var_b:
+                conflicts.append(f"Variant difference: {var_a or 'Standard'} vs {var_b or 'Standard'}")
+                return 0.0, matches, conflicts
+        elif var_a and var_b and var_a == var_b:
+            matches.append(f"Matching variant: {var_a}")
+
+        # Coupling model (L-110 vs G20)
+        cp_a = mod_a.get("coupling_model")
+        cp_b = mod_b.get("coupling_model")
+        if cp_a and cp_b:
+            if cp_a == cp_b:
+                matches.append(f"Coupling model match: {cp_a}")
+            else:
+                conflicts.append(f"Coupling model Conflict: {cp_a} vs {cp_b}")
+                return 0.0, matches, conflicts
+
+        # V-Belt model (SPB 2240)
+        bl_a = mod_a.get("belt_model")
+        bl_b = mod_b.get("belt_model")
+        if bl_a and bl_b:
+            if bl_a == bl_b:
+                matches.append(f"Belt model match: {bl_a}")
+            else:
+                conflicts.append(f"Belt model Conflict: {bl_a} vs {bl_b}")
+                return 0.0, matches, conflicts
+
+        # Chain model (16B-1)
+        ch_a = mod_a.get("chain_model")
+        ch_b = mod_b.get("chain_model")
+        if ch_a and ch_b:
+            if ch_a == ch_b:
+                matches.append(f"Chain model match: {ch_a}")
+            else:
+                conflicts.append(f"Chain model Conflict: {ch_a} vs {ch_b}")
+                return 0.0, matches, conflicts
+
+        # 4. Dimension Matching & Conflicts
         dims_a = attrs_a.get("dimensions", {})
         dims_b = attrs_b.get("dimensions", {})
 
-        # Nominal Bore
+        # Nominal Bore (150NB vs 100NB)
         nb_a = dims_a.get("nominal_bore")
         nb_b = dims_b.get("nominal_bore")
         if nb_a and nb_b:
@@ -420,17 +532,37 @@ class AttributeExtractor:
                 conflicts.append(f"Nominal bore mismatch: {nb_a} vs {nb_b}")
                 return 0.0, matches, conflicts
 
-        # Boundary dimensions (e.g. 25x52x15 mm)
+        # Bore diameter (200mm vs 100mm)
+        bore_a = dims_a.get("bore_diameter_mm")
+        bore_b = dims_b.get("bore_diameter_mm")
+        if bore_a and bore_b:
+            if bore_a == bore_b:
+                matches.append(f"Bore diameter match: {bore_a}mm")
+            else:
+                conflicts.append(f"Bore diameter mismatch: {bore_a}mm vs {bore_b}mm")
+                return 0.0, matches, conflicts
+
+        # Boundary dimensions (e.g. 25x52x15 mm vs 100x180x46 mm)
         b3_a = dims_a.get("boundary_3d")
         b3_b = dims_b.get("boundary_3d")
         if b3_a and b3_b:
             if b3_a == b3_b:
                 matches.append(f"Boundary dimensions match: {b3_a}")
             else:
-                conflicts.append(f"Dimension mismatch: {b3_a} vs {b3_b}")
+                conflicts.append(f"Boundary dimensions mismatch: {b3_a} vs {b3_b}")
                 return 0.0, matches, conflicts
 
-        # Bolt specs
+        # Wire rope diameter (24mm vs 32mm)
+        dia_a = dims_a.get("diameter_mm")
+        dia_b = dims_b.get("diameter_mm")
+        if dia_a and dia_b:
+            if abs(dia_a - dia_b) < 0.5:
+                matches.append(f"Diameter match: {dia_a}mm")
+            else:
+                conflicts.append(f"Diameter mismatch: {dia_a}mm vs {dia_b}mm")
+                return 0.0, matches, conflicts
+
+        # Bolt specs (M16x80 vs M24x100)
         bt_a = dims_a.get("bolt_thread")
         bt_b = dims_b.get("bolt_thread")
         bl_a = dims_a.get("bolt_length_mm")
@@ -441,15 +573,6 @@ class AttributeExtractor:
             else:
                 conflicts.append(f"Bolt dimension mismatch: {bt_a}x{bl_a} vs {bt_b}x{bl_b}")
                 return 0.0, matches, conflicts
-
-        # 5. Part Number Match
-        pn_a = attrs_a.get("models", {}).get("part_number")
-        pn_b = attrs_b.get("models", {}).get("part_number")
-        if pn_a and pn_b:
-            if pn_a == pn_b:
-                matches.append(f"Part/Model number match: {pn_a}")
-            else:
-                conflicts.append(f"Part/Model number mismatch: {pn_a} vs {pn_b}")
 
         # 6. Standards Match
         st_a = set(attrs_a.get("standards", []))
