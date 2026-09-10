@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  ml-service:
+    build:
+      context: ./ML
+      dockerfile: Dockerfile.ml
+    container_name: sih_ml_service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - OLLAMA_URL=http://host.containers.internal:11434
+      - LLM_MODEL=qwen2.5:3b
+      - SAVINGS_PERCENTAGE=0.08
+      - HF_HUB_OFFLINE=1
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: sih_backend_gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ML_SERVICE_URL=http://ml-service:8001
+      - DATABASE_URL=sqlite:///./material_master.db
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - backend-storage:/app
+    depends_on:
+      - ml-service
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+    container_name: sih_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  backend-storage:

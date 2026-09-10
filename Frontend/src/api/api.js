@@ -1,5 +1,6 @@
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-const ML_URL = import.meta.env.VITE_ML_URL || 'http://localhost:8001';
+const defaultHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || `http://${defaultHost}:8000`;
+const ML_URL = import.meta.env.VITE_ML_URL || `http://${defaultHost}:8001`;
 
 // ── Backend APIs ──────────────────────────────────────────────────────────────
 
