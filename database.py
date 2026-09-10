@@ -1,15 +1,25 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Uses a local SQLite database file named material_master.db
-DATABASE_URL = "sqlite:///./material_master.db"
+# Database URL pointing to a local SQLite file
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./material_master.db")
 
-# connect_args is needed only for SQLite to allow multiple threads
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# check_same_thread=False is required for SQLite concurrency in FastAPI
+connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=True
+)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
 
 def get_db():
+    """Dependency provider yielding an independent database session per request."""
     db = SessionLocal()
     try:
         yield db
