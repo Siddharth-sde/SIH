@@ -29,7 +29,10 @@ COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 
 # Copy Backend codebase
 COPY Backend/ /app/
-COPY models.py database.py /app/
+
+# Copy processed golden crosswalk dataset and KPIs for cold-start database hydration
+COPY ML/data/processed/material_crosswalk.csv /app/material_crosswalk.csv
+COPY ML/data/processed/dashboard_kpis.json /app/dashboard_kpis.json
 
 # Configure Nginx
 COPY nginx-app.conf /etc/nginx/conf.d/default.conf

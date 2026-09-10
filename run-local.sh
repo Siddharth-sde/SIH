@@ -7,7 +7,7 @@ VENV_DIR="${ROOT_DIR}/.venv"
 NODE_BIN="${ROOT_DIR}/Frontend/node_modules/.bin"
 
 export PATH="${VENV_DIR}/bin:${NODE_BIN}:${PATH}"
-export PYTHONPATH="${ROOT_DIR}/ML:${ROOT_DIR}"
+export PYTHONPATH="${ROOT_DIR}/Backend:${ROOT_DIR}/ML:${ROOT_DIR}"
 
 echo "=================================================="
 echo "  Starting National Material Master Platform"

@@ -1,6 +1,7 @@
 const defaultHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || `http://${defaultHost}:8000`;
-const ML_URL = import.meta.env.VITE_ML_URL || `http://${defaultHost}:8001`;
+const isProxied = typeof window !== 'undefined' && window.location.port === '5173';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (isProxied ? '' : `http://${defaultHost}:8000`);
+const ML_URL = import.meta.env.VITE_ML_URL || (isProxied ? '' : `http://${defaultHost}:8001`);
 
 // ── Backend APIs ──────────────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ export const updateMaterialStatus = (id, action) =>
 // ── ML Service APIs ───────────────────────────────────────────────────────────
 
 export const getMLHealth = () =>
-  fetch(`${ML_URL}/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
+  fetch(`${BACKEND_URL || ML_URL}/api/ml/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
 
 export const getMLKPIs = () =>
   fetch(`${ML_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);

@@ -25,14 +25,14 @@ else
     exit 1
 fi
 
-# Check if Ollama is already running on port 11434
-if curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-    echo "[*] Existing Ollama service detected on :11434. Starting ml-service and app containers..."
-    ${COMPOSE_CMD} up -d --build ml-service app
-else
-    echo "[*] Starting all 3 containers via ${COMPOSE_CMD}..."
-    ${COMPOSE_CMD} up -d --build
+# Check if legacy 'ollama' container exists and clean it up to prevent port conflict
+if podman ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^ollama$'; then
+    echo "[*] Migrating legacy 'ollama' container to compose-managed 'sih_ollama'..."
+    podman rm -f ollama 2>/dev/null || true
 fi
+
+echo "[*] Deploying all 3 containers via ${COMPOSE_CMD}..."
+${COMPOSE_CMD} up -d --build
 
 echo ""
 echo "=================================================="

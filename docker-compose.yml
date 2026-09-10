@@ -29,6 +29,9 @@ services:
       - LLM_MODEL=qwen2.5:3b
       - SAVINGS_PERCENTAGE=0.08
       - HF_HUB_OFFLINE=1
+      - EMBEDDING_MODEL_PATH=/app/models/all-MiniLM-L6-v2
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
     depends_on:
       - ollama
 
@@ -44,8 +47,10 @@ services:
       - "5173:5173"
     environment:
       - ML_SERVICE_URL=http://ml-service:8001
-      - DATABASE_URL=sqlite:///./material_master.db
+      - DATABASE_URL=sqlite:////app/data/material_master.db
       - PYTHONUNBUFFERED=1
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
     volumes:
       - sih-data:/app/data
     depends_on:
@@ -53,4 +58,5 @@ services:
 
 volumes:
   ollama-storage:
+    external: true
   sih-data:
