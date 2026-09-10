@@ -1,21 +1,38 @@
-from sqlalchemy import Column, Integer, String, Float
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from datetime import datetime
 from database import Base
 
-class CPSEMaterial(Base):
-    __tablename__ = "cpse_materials"
+class MaterialMaster(Base):
+    __tablename__ = "materials"
 
     id = Column(Integer, primary_key=True, index=True)
-    material_id = Column(String, unique=True, index=True)       # e.g., "MAT-OG-000001"
-    cpse_name = Column(String, index=True)                      # e.g., "ONGC", "IOCL", "BPCL"
-    sector = Column(String, index=True)                         # e.g., "Oil & Gas"
-    plant = Column(String)                                      # e.g., "ONGC-PLANT-05"
-    legacy_material_code = Column(String, index=True)           # e.g., "OG-126225"
-    material_description = Column(String)                       # The messy CPSE description
-    standardized_description = Column(String)                   # The clean harmonized description
-    technical_specification = Column(String)                    # e.g., "DOE 10 inch"
-    uom = Column(String)                                        # Unit of Measure (EA, LTR, etc.)
-    unit_price = Column(Float, default=0.0)                     # Price in INR
-    annual_consumption = Column(Integer, default=0)             # For inventory demand aggregation
-    cnmc_code = Column(String, index=True)                      # e.g., "NMC-OG-00655"
-    match_type = Column(String)                                 # EXACT_DUPLICATE, NEAR_DUPLICATE, etc.
-    status = Column(String, default="ACTIVE")
+    
+    # 7 Core Standardized Columns (Always present)
+    material_code = Column(String(100), index=True)      # Any code (source_material_code, legacy_material_code, MATNR)
+    description = Column(String(500), index=True)        # The raw description
+    cpse_name = Column(String(100), index=True)          # CPCL, ONGC, NTPC, etc.
+    sector = Column(String(100), index=True)             # Oil & Gas, Power, etc.
+    uom = Column(String(50), default="NOS")              # Unit of measure
+    unit_price = Column(Float, default=0.0)              # Price in INR
+    stock_qty = Column(Integer, default=0)               # Current stock / inventory
+    annual_qty = Column(Integer, default=0)              # Annual consumption
+    
+    # Harmonization & Registry Output
+    cnmc_code = Column(String(100), index=True, default="PENDING")
+    standardized_description = Column(String(500), default="")
+    status = Column(String(50), default="ACTIVE")        # ACTIVE, PENDING_REVIEW, APPROVED, REJECTED
+    
+    # Universal Dynamic Storage: Any other columns (bucket, specs, plant, vendor, etc.) go here as JSON
+    extra_data = Column(Text, default="{}")
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    material_code = Column(String(100))
+    action = Column(String(50))                          # e.g., "MERGED", "APPROVED", "REJECTED"
+    performed_by = Column(String(100), default="SYSTEM_ADMIN")
+    notes = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow)
