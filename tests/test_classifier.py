@@ -2,7 +2,11 @@
 Unit tests for Stage 3 Classifier and Vector Embeddings.
 """
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
+import unittest
 import numpy as np
 import pandas as pd
 from src.preprocessor import preprocessor
@@ -72,3 +76,21 @@ def test_classifier_on_400_dataset():
     # Ensure bearings and valves represent substantial portions
     assert category_counts.get("BEARINGS", 0) >= 20
     assert category_counts.get("VALVES_FLOW", 0) >= 20
+
+
+class TestClassifier(unittest.TestCase):
+    def test_embedding_shape_and_normalization(self):
+        test_embedding_shape_and_normalization()
+
+    def test_category_classification_core_spares(self):
+        test_category_classification_core_spares()
+
+    def test_adversarial_ambiguous_classification(self):
+        test_adversarial_ambiguous_classification()
+
+    def test_classifier_on_400_dataset(self):
+        test_classifier_on_400_dataset()
+
+
+if __name__ == "__main__":
+    unittest.main()

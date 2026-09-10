@@ -227,33 +227,62 @@ class DualLayerClassifier:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
-        ollama_url: str = "http://127.0.0.1:11434",
-        llm_model: str = "qwen2.5:3b",
+        model_name: Optional[str] = None,
+        ollama_url: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        lazy_init: bool = True
     ):
         import os
-        if os.path.exists("models/all-MiniLM-L6-v2"):
-            model_path = "models/all-MiniLM-L6-v2"
-            os.environ["HF_HUB_OFFLINE"] = "1"
-        else:
+        env_model = os.getenv("EMBEDDING_MODEL_PATH")
+        if model_name:
             model_path = model_name
+        elif env_model and os.path.exists(env_model):
+            model_path = env_model
+        elif os.path.exists("models/all-MiniLM-L6-v2"):
+            model_path = "models/all-MiniLM-L6-v2"
+        else:
+            model_path = "all-MiniLM-L6-v2"
 
         self.model_name = model_path
-        self.ollama_url = ollama_url
-        self.llm_model = llm_model
+        self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+        self.llm_model = llm_model or os.getenv("LLM_MODEL", "qwen2.5:3b")
 
-        # Load Sentence Transformer on CPU
-        logger.info(f"Loading SentenceTransformer: {model_path}")
-        self.embedder = SentenceTransformer(model_path, device="cpu", local_files_only=os.path.exists(model_path))
-
-        # Build Category Anchor Embeddings
+        self._embedder: Optional[SentenceTransformer] = None
+        self._anchor_matrix: Optional[np.ndarray] = None
         self.category_ids: List[str] = list(TAXONOMY.keys())
+        self.anchor_to_category: List[str] = []
+
+        if not lazy_init:
+            self._ensure_initialized()
+
+    @property
+    def embedder(self) -> SentenceTransformer:
+        if self._embedder is None:
+            self._ensure_initialized()
+        return self._embedder
+
+    @property
+    def anchor_matrix(self) -> np.ndarray:
+        if self._anchor_matrix is None:
+            self._ensure_initialized()
+        return self._anchor_matrix
+
+    def _ensure_initialized(self):
+        """Loads SentenceTransformer weights and builds anchor index on first use."""
+        if self._embedder is not None and self._anchor_matrix is not None:
+            return
+        import os
+        is_local = os.path.exists(self.model_name)
+        if is_local and os.getenv("HF_HUB_OFFLINE") is None:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+        logger.info(f"Loading SentenceTransformer: {self.model_name} (local={is_local})")
+        self._embedder = SentenceTransformer(self.model_name, device="cpu", local_files_only=is_local)
         self._build_anchor_index()
 
     def _build_anchor_index(self):
         """Encodes all anchor descriptions into a normalized embedding matrix."""
         all_anchor_texts = []
-        self.anchor_to_category: List[str] = []
+        self.anchor_to_category = []
 
         for cat_id, cat_info in TAXONOMY.items():
             for anchor in cat_info["anchors"]:
@@ -261,8 +290,8 @@ class DualLayerClassifier:
                 self.anchor_to_category.append(cat_id)
 
         # Encode and normalize
-        embs = self.embedder.encode(all_anchor_texts, convert_to_numpy=True, normalize_embeddings=True)
-        self.anchor_matrix = embs  # Shape: (N_anchors, 384)
+        embs = self._embedder.encode(all_anchor_texts, convert_to_numpy=True, normalize_embeddings=True)
+        self._anchor_matrix = embs  # Shape: (N_anchors, 384)
 
     def encode_text(self, text: str) -> np.ndarray:
         """Returns 384-d normalized embedding vector."""
@@ -548,7 +577,7 @@ class DualLayerClassifier:
 
             ranked_cats = sorted(cat_max_sim.items(), key=lambda x: x[1], reverse=True)
             top_cat_id, top_score = ranked_cats[0]
-            second_cat_id, second_score = ranked_cats[1]
+            _, second_score = ranked_cats[1]
 
             if top_score >= 0.70 and (top_score - second_score >= 0.08):
                 reasoning = f"Closest exemplar anchor match with cosine similarity {top_score:.3f} (margin: +{top_score-second_score:.3f})"

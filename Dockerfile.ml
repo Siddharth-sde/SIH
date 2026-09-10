@@ -13,8 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy offline model weights
-COPY models/ /app/models/
+# Copy offline model weights if present in build context (resilient build)
+RUN mkdir -p /app/models
+COPY README.md models* /app/models/
+RUN rm -f /app/models/README.md
 
 # Copy source code and pre-processed golden outputs
 COPY src/ /app/src/

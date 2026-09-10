@@ -28,11 +28,10 @@ class AttributeExtractor:
     # --- Pressure / Class Ratings ---
     RE_PRESSURE_CLASS = [
         re.compile(r"\b(?:class|cl\.?)\s*(\d{2,4})\b", re.I),
-        re.compile(r"\b(\d{2,4})\s*#\b", re.I),
+        re.compile(r"\b(\d{2,4})\s*#(?!\d)", re.I),
         re.compile(r"\b(\d{2,4})\s*psi\b", re.I),
         re.compile(r"\b(\d+(?:\.\d+)?)\s*bar\b", re.I),
         re.compile(r"\b(\d+(?:\.\d+)?)\s*mpa\b", re.I),
-        re.compile(r"\b(\d+)\s*kA\b", re.I),
     ]
 
     # --- Dimensions ---
@@ -49,6 +48,7 @@ class AttributeExtractor:
     RE_POWER_KW = re.compile(r"\b(\d+(?:\.\d+)?)\s*kW\b", re.I)
     RE_POWER_MVA = re.compile(r"\b(\d+(?:\.\d+)?)\s*(MVA|kVA)\b", re.I)
     RE_CURRENT_A = re.compile(r"\b(\d+)\s*A\b", re.I)
+    RE_BREAKING_CAPACITY_KA = re.compile(r"\b(\d+)\s*kA\b", re.I)
     RE_CABLE_CORE_SIZE = re.compile(r"\b(\d+)\s*C\s*x\s*(\d+(?:\.\d+)?)\s*(?:sqmm|sq\s*mm)\b", re.I)
 
     # --- Part / Model Numbers ---
@@ -106,19 +106,13 @@ class AttributeExtractor:
 
     def extract_pressure_class(self, text: str) -> Optional[int]:
         """Extracts numeric pressure class rating (e.g. 150, 300, 600, 1500)."""
-        # Look specifically for class / # rating first
-        m = re.search(r"\bclass\s*(\d{2,4})\b", text, re.I)
-        if m:
-            return int(m.group(1))
-
-        m = re.search(r"\b(\d{2,4})\s*#\b", text, re.I)
-        if m:
-            return int(m.group(1))
-
-        m = re.search(r"\b(\d{2,4})\s*psi\b", text, re.I)
-        if m:
-            return int(m.group(1))
-
+        for pat in self.RE_PRESSURE_CLASS:
+            m = pat.search(text)
+            if m:
+                try:
+                    return int(float(m.group(1)))
+                except (ValueError, TypeError):
+                    continue
         return None
 
     def extract_dimensions(self, text: str) -> Dict[str, Any]:
@@ -211,6 +205,10 @@ class AttributeExtractor:
         m_amp = self.RE_CURRENT_A.search(text)
         if m_amp and not m_mva:
             elec["current_rating_a"] = int(m_amp.group(1))
+
+        m_ka = self.RE_BREAKING_CAPACITY_KA.search(text)
+        if m_ka:
+            elec["breaking_capacity_ka"] = int(m_ka.group(1))
 
         # Cable Core x Size (e.g. 3C x 400 sqmm)
         m_cable = self.RE_CABLE_CORE_SIZE.search(text)
