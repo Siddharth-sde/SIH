@@ -1,0 +1,12 @@
+# Ignore local database
+*.db
+material_master.db
+
+# Ignore large raw datasets (share these via Google Drive/OneDrive instead)
+*.csv
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+.env
+venv/
