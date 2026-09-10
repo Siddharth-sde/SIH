@@ -1,0 +1,133 @@
+"""
+Unit tests for Stage 4 Deduplication Matcher, Clustering, and Evaluation.
+"""
+
+import pytest
+import pandas as pd
+import numpy as np
+from src.preprocessor import preprocessor
+from src.attribute_extractor import attribute_extractor
+from src.classifier import classifier
+from src.matcher import matcher, DeduplicationMatcher
+
+
+def test_cnmc_generation():
+    m = DeduplicationMatcher()
+    code1 = m.generate_cnmc_code("VALVES_FLOW", "Oil & Gas", 1)
+    assert code1 == "NMC-OG-VLV-0001"
+
+    code2 = m.generate_cnmc_code("BEARINGS", "Steel", 42)
+    assert code2 == "NMC-ST-BRG-0042"
+
+    code3 = m.generate_cnmc_code("CABLES_CONDUCTORS", "Power", 9)
+    assert code3 == "NMC-PW-CBL-0009"
+
+
+def test_pairwise_similarity_bearing_cluster():
+    m = DeduplicationMatcher()
+
+    # Item 1: CPCL Spherical Roller Bearing
+    item1 = {
+        "source_material_code": "CP-10010",
+        "cleaned_description": "spherical roller bearing bearing 22220",
+        "canonical_uom": "NOS",
+        "specs": {
+            "models": {"part_number": "22220"},
+            "dimensions": {"boundary_3d": "100x180x46 mm"},
+            "standards": ["ISO 15"]
+        },
+        "embedding": classifier.encode_text("spherical roller bearing bearing 22220 iso 15 100x180x46 mm")
+    }
+
+    # Item 2: SAIL Roll Neck Bearing (same 22220)
+    item2 = {
+        "source_material_code": "SA-10012",
+        "cleaned_description": "spherical roller bearing bearing 22220",
+        "canonical_uom": "NOS",
+        "specs": {
+            "models": {"part_number": "22220"},
+            "dimensions": {"boundary_3d": "100x180x46 mm"},
+            "standards": ["ISO 15"]
+        },
+        "embedding": classifier.encode_text("spherical roller bearing bearing 22220 iso 15 100x180x46 mm")
+    }
+
+    score, matches, conflicts = m.calculate_pairwise_similarity(item1, item2)
+    assert score >= 0.85
+    assert not conflicts
+    assert any("22220" in m for m in matches)
+
+
+def test_pairwise_rejection_valve_pressure_conflict():
+    m = DeduplicationMatcher()
+
+    v150 = {
+        "source_material_code": "CP-50000",
+        "cleaned_description": "gate valve 150nb class 150 carbon steel flanged",
+        "canonical_uom": "NOS",
+        "specs": {"pressure_class": 150, "dimensions": {"nominal_bore": "150NB"}},
+        "embedding": classifier.encode_text("gate valve 150nb class 150 carbon steel flanged")
+    }
+
+    v300 = {
+        "source_material_code": "CP-50010",
+        "cleaned_description": "gate valve 150nb class 300 carbon steel flanged",
+        "canonical_uom": "NOS",
+        "specs": {"pressure_class": 300, "dimensions": {"nominal_bore": "150NB"}},
+        "embedding": classifier.encode_text("gate valve 150nb class 300 carbon steel flanged")
+    }
+
+    score, matches, conflicts = m.calculate_pairwise_similarity(v150, v300)
+    assert score == 0.0
+    assert any("Pressure Class Conflict" in c for c in conflicts)
+
+
+def test_clustering_and_evaluation_on_400_dataset():
+    df = pd.read_csv("material_master_input.csv")
+    gt = pd.read_csv("ground_truth_clusters.csv")
+
+    p_df = preprocessor.process_dataframe(df)
+
+    records = []
+    for idx, row in p_df.iterrows():
+        specs = attribute_extractor.extract(row["cleaned_description"], row["cleaned_spec_text"])
+        cls = classifier.classify(row["cleaned_description"], row["cleaned_spec_text"], specs)
+        records.append({
+            "idx": idx,
+            "source_material_code": row["source_material_code"],
+            "cpse_id": row["cpse_id"],
+            "plant_code": df.iloc[idx].get("plant_code", ""),
+            "raw_description": row["raw_description"],
+            "cleaned_description": row["cleaned_description"],
+            "specs": specs,
+            "category_id": cls["category_id"],
+            "embedding": np.array(cls["embedding"]),
+            "canonical_uom": row["canonical_uom"],
+            "source_uom": row["source_uom"],
+            "unit_price_inr": row["unit_price_inr"],
+            "current_stock_qty": row["current_stock_qty"],
+            "annual_procurement_qty": row["annual_procurement_qty"],
+        })
+
+    golden_clusters, crosswalk_records = matcher.cluster_and_harmonize(records)
+
+    assert len(crosswalk_records) == 400
+    assert len(golden_clusters) > 100
+
+    # Ensure every crosswalk item has a valid CNMC code
+    assert all(r["cnmc_code"].startswith("NMC-") for r in crosswalk_records)
+
+    # Evaluate against ground truth
+    metrics = matcher.evaluate_against_ground_truth(records, golden_clusters, gt)
+
+    print("\nBenchmark Evaluation Results:")
+    print(f"  Total Items:        {metrics['total_items']}")
+    print(f"  Golden Clusters:    {metrics['total_golden_clusters']}")
+    print(f"  Duplicate Clusters: {metrics['duplicate_clusters']}")
+    print(f"  Precision:          {metrics['precision']:.4f}")
+    print(f"  Recall:             {metrics['recall']:.4f}")
+    print(f"  F1 Score:           {metrics['f1_score']:.4f}")
+
+    assert metrics["precision"] >= 0.65
+    assert metrics["recall"] >= 0.90
+    assert metrics["f1_score"] >= 0.75
