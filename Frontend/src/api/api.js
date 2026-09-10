@@ -1,0 +1,47 @@
+﻿const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const ML_URL = import.meta.env.VITE_ML_URL || 'http://localhost:8001';
+
+// ── Backend APIs ──────────────────────────────────────────────────────────────
+
+export const getKPIs = () =>
+  fetch(`${BACKEND_URL}/api/analytics/kpis`).then(r => r.json());
+
+export const getMaterials = (params = {}) => {
+  const qs = new URLSearchParams(
+    Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== '' && v !== null))
+  );
+  return fetch(`${BACKEND_URL}/api/materials?${qs}`).then(r => r.json());
+};
+
+export const getClusters = (limit = 25) =>
+  fetch(`${BACKEND_URL}/api/duplicates/clusters?limit=${limit}`).then(r => r.json());
+
+export const uploadFile = (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetch(`${BACKEND_URL}/api/upload`, { method: 'POST', body: fd }).then(r => r.json());
+};
+
+export const updateMaterialStatus = (id, action) =>
+  fetch(`${BACKEND_URL}/api/materials/${id}/action?action=${action}`, { method: 'POST' }).then(r => r.json());
+
+// ── ML Service APIs ───────────────────────────────────────────────────────────
+
+export const getMLHealth = () =>
+  fetch(`${ML_URL}/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
+
+export const getMLKPIs = () =>
+  fetch(`${ML_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);
+
+export const matchSingle = (payload) =>
+  fetch(`${ML_URL}/api/ml/match-single`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => { if (!r.ok) throw new Error('ML service error'); return r.json(); });
+
+export const harmonizeBatch = (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetch(`${ML_URL}/api/ml/harmonize-batch`, { method: 'POST', body: fd }).then(r => r.json());
+};
