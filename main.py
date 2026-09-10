@@ -8,6 +8,7 @@ import pandas as pd
 import json
 import io
 import os
+import pdf_extractor
 
 Base.metadata.create_all(bind=engine)
 
@@ -126,14 +127,24 @@ async def upload_any_file(file: UploadFile = File(...), db: Session = Depends(ge
             df = pd.read_csv(io.StringIO(contents.decode("utf-8", errors="ignore")))
         elif filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(io.BytesIO(contents))
+        elif filename.endswith(".pdf"):
+            df = pdf_extractor.extract_tables_from_pdf(contents)
+            if df.empty:
+                raise HTTPException(
+                    status_code=422, 
+                    detail="No structured tables found in the PDF. If it is a scanned document, OCR processing is required."
+                )
         else:
-            raise HTTPException(status_code=400, detail="Only CSV or Excel files are accepted.")
+            raise HTTPException(status_code=400, detail="Supported formats: CSV, XLSX, XLS, PDF.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File parsing error: {str(e)}")
 
+    # Passes straight into your existing Universal Ingestion function
     count = parse_and_store_dataframe(df, db, file.filename)
-    return {"message": f"Successfully ingested {count} records from {file.filename} into universal storage."}
-
+    return {
+        "message": f"Successfully extracted and ingested {count} records from PDF '{file.filename}'.",
+        "detected_columns": list(df.columns)
+    }
 # 2. LOCAL SYNC: One-click sync from any file in your project folder
 @app.post("/api/load-local-file")
 def load_local(file_name: str = Query(..., description="File name in current folder, e.g. material_master_input.csv"), db: Session = Depends(get_db)):
