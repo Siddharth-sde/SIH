@@ -3,6 +3,8 @@ Stage 4: Intra-Category Hybrid Deduplication Clustering & CNMC Generation.
 National Unified Material Master Platform - ML Engine.
 """
 
+import os
+import re
 import logging
 from typing import Dict, Any, List, Tuple, Optional, Set
 import numpy as np
@@ -15,6 +17,67 @@ from src.preprocessor import UOMHarmonizer
 from src.classifier import TAXONOMY
 
 logger = logging.getLogger(__name__)
+
+
+# Standard ISO 15 / DIN 625 Deep Groove & Spherical Roller Bearing Dimension Crosswalk
+ISO_BEARING_DIMENSIONS: Dict[str, str] = {
+    # Deep Groove Ball Bearings (60xx, 62xx, 63xx series)
+    "6000": "10x26x8 mm",
+    "6001": "12x28x8 mm",
+    "6002": "15x32x9 mm",
+    "6003": "17x35x10 mm",
+    "6004": "20x42x12 mm",
+    "6005": "25x47x12 mm",
+    "6200": "10x30x9 mm",
+    "6201": "12x32x10 mm",
+    "6202": "15x35x11 mm",
+    "6203": "17x40x12 mm",
+    "6204": "20x47x14 mm",
+    "6205": "25x52x15 mm",
+    "6206": "30x62x16 mm",
+    "6207": "35x72x17 mm",
+    "6208": "40x80x18 mm",
+    "6209": "45x85x19 mm",
+    "6210": "50x90x20 mm",
+    "6300": "10x35x11 mm",
+    "6301": "12x37x12 mm",
+    "6302": "15x42x13 mm",
+    "6303": "17x47x14 mm",
+    "6304": "20x52x15 mm",
+    "6305": "25x62x17 mm",
+    "6306": "30x72x19 mm",
+    "6307": "35x80x21 mm",
+    "6308": "40x90x23 mm",
+    "6309": "45x100x25 mm",
+    "6310": "50x110x27 mm",
+    "6312": "60x130x31 mm",
+    # Spherical Roller Bearings (222xx, 223xx series)
+    "22208": "40x80x23 mm",
+    "22210": "50x90x23 mm",
+    "22212": "60x110x28 mm",
+    "22215": "75x130x31 mm",
+    "22216": "80x140x33 mm",
+    "22218": "90x160x40 mm",
+    "22220": "100x180x46 mm",
+    "22222": "110x200x53 mm",
+    "22224": "120x215x58 mm",
+    "22310": "50x110x40 mm",
+    "22312": "60x130x46 mm",
+    "22314": "70x150x51 mm",
+    "22316": "80x170x58 mm",
+    "22318": "90x190x64 mm",
+    "22320": "100x215x73 mm",
+}
+DIMENSION_TO_BEARING: Dict[str, str] = {v: k for k, v in ISO_BEARING_DIMENSIONS.items()}
+
+
+def normalize_bearing_part_no(part_no: str) -> str:
+    """Strips common seal/shield/clearance suffixes to isolate base ISO series."""
+    if not part_no:
+        return ""
+    # Strip suffixes like -2RSH, -2RS, -ZZ, 2RS, C3, W33, etc.
+    p = re.sub(r"[-/\s]*(?:2RSH?|2RS1?|2Z|ZZ|C[1-5]|W33|K)\b", "", str(part_no), flags=re.I).strip().upper()
+    return p
 
 
 # Short sector code for CNMC formatting
@@ -58,8 +121,14 @@ class DeduplicationMatcher:
     CNMC code generation, and explainability reasoning.
     """
 
-    def __init__(self, match_threshold: float = 0.82):
-        self.match_threshold = match_threshold
+    def __init__(self, match_threshold: Optional[float] = None):
+        env_thresh = os.getenv("MATCH_THRESHOLD")
+        if match_threshold is not None:
+            self.match_threshold = match_threshold
+        elif env_thresh:
+            self.match_threshold = float(env_thresh)
+        else:
+            self.match_threshold = 0.82
         self.uom_harmonizer = UOMHarmonizer()
 
     def calculate_pairwise_similarity(
@@ -85,7 +154,6 @@ class DeduplicationMatcher:
             item_b.get("canonical_uom", "NOS")
         )
         uom_conflict = not uom_compat
-        uom_reasons = [uom_msg]
 
         # 3. Dense Semantic Vector Cosine Similarity
         emb_a = item_a.get("embedding")
@@ -100,16 +168,26 @@ class DeduplicationMatcher:
         desc_b = item_b.get("cleaned_description", "")
         fuzzy_sim = fuzz.token_sort_ratio(desc_a, desc_b) / 100.0
 
-        # 5. OEM Part Number vs Generic Bearing Trap (6205-2RSH vs 25x52x15mm)
-        part_a = item_a["specs"].get("models", {}).get("part_number", "")
-        part_b = item_b["specs"].get("models", {}).get("part_number", "")
+        # 5. OEM Part Number vs Generic Bearing Equivalence (ISO 15 Standard Crosswalk)
+        raw_part_a = item_a["specs"].get("models", {}).get("part_number", "")
+        raw_part_b = item_b["specs"].get("models", {}).get("part_number", "")
+        part_a = normalize_bearing_part_no(raw_part_a)
+        part_b = normalize_bearing_part_no(raw_part_b)
         dim_a = item_a["specs"].get("dimensions", {}).get("boundary_3d", "")
         dim_b = item_b["specs"].get("dimensions", {}).get("boundary_3d", "")
 
         is_oem_generic = False
-        if ("6205-2RSH" in (part_a, part_b) or "6205" in (part_a, part_b)) and ("25x52x15 mm" in (dim_a, dim_b)):
+        if part_a and dim_b and ISO_BEARING_DIMENSIONS.get(part_a) == dim_b:
             is_oem_generic = True
-            attr_matches.append("OEM model 6205-2RSH matches generic standard dimension 25x52x15mm")
+            attr_matches.append(f"OEM bearing model {raw_part_a} matches standard ISO dimension {dim_b}")
+        elif part_b and dim_a and ISO_BEARING_DIMENSIONS.get(part_b) == dim_a:
+            is_oem_generic = True
+            attr_matches.append(f"OEM bearing model {raw_part_b} matches standard ISO dimension {dim_a}")
+        elif dim_a and dim_b and dim_a == dim_b and (part_a or part_b):
+            expected_pn = DIMENSION_TO_BEARING.get(dim_a)
+            if expected_pn and (part_a == expected_pn or part_b == expected_pn):
+                is_oem_generic = True
+                attr_matches.append(f"Equivalent ISO standard bearing dimension {dim_a} (Series {expected_pn})")
 
         # 6. Hybrid Score Synthesis
         if is_oem_generic:

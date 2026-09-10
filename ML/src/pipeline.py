@@ -28,16 +28,21 @@ class MaterialHarmonizationPipeline:
     - Stage 4: Deduplication Graph Clustering & CNMC Code Generation
     """
 
-    def __init__(self, match_threshold: float = 0.82):
+    def __init__(self, match_threshold: Optional[float] = None, auto_load_catalog: bool = True):
         self.preprocessor = preprocessor
         self.attribute_extractor = attribute_extractor
         self.classifier = classifier
         self.matcher = matcher
-        self.matcher.match_threshold = match_threshold
+        if match_threshold is not None:
+            self.matcher.match_threshold = match_threshold
 
         self.golden_clusters: List[Dict[str, Any]] = []
         self.crosswalk_records: List[Dict[str, Any]] = []
         self.processed_records: List[Dict[str, Any]] = []
+        self._canonical_embeddings: Dict[str, np.ndarray] = {}
+
+        if auto_load_catalog:
+            self.load_existing_catalog()
 
     def process_dataset(self, csv_path: str) -> Dict[str, Any]:
         """
@@ -81,6 +86,7 @@ class MaterialHarmonizationPipeline:
                 "raw_spec_text": row["raw_spec_text"],
                 "cleaned_description": row["cleaned_description"],
                 "cleaned_spec_text": row["cleaned_spec_text"],
+                "combined_text": row.get("combined_text", f"{row['cleaned_description']} {row['cleaned_spec_text']}".strip()),
                 "specs": specs,
                 "category_id": cls_result["category_id"],
                 "category_name": cls_result["category_name"],
@@ -147,13 +153,15 @@ class MaterialHarmonizationPipeline:
         unique_cnmcs = len(self.golden_clusters)
         duplicates = total_items - unique_cnmcs
         total_spend = sum(r["unit_price_inr"] * r["annual_procurement_qty"] for r in self.crosswalk_records)
-        est_savings = round(total_spend * 0.08, 2)
+        savings_pct = float(os.getenv("SAVINGS_PERCENTAGE", "0.08"))
+        est_savings = round(total_spend * savings_pct, 2)
 
         kpis = {
             "total_materials_ingested": total_items,
             "unique_national_materials": unique_cnmcs,
             "duplicates_rationalized": duplicates,
-            "rationalization_percentage": f"{(duplicates / total_items * 100):.1f}%",
+            "rationalization_percentage": f"{(duplicates / total_items * 100):.1f}%" if total_items > 0 else "0.0%",
+            "savings_percentage_applied": f"{savings_pct * 100:.1f}%",
             "total_annual_spend_inr": total_spend,
             "estimated_procurement_savings_inr": f"₹{est_savings:,.2f}",
         }
@@ -167,32 +175,106 @@ class MaterialHarmonizationPipeline:
             "kpis": kpi_path,
         }
 
-    def match_single_query(self, query_text: str, top_k: int = 5) -> Dict[str, Any]:
+    def load_existing_catalog(self, output_dir: Optional[str] = None) -> bool:
+        """Loads pre-processed golden clusters into memory if available."""
+        import csv
+        data_dir = output_dir or os.getenv("PROCESSED_DATA_DIR", "data/processed")
+        master_path = os.path.join(data_dir, "unified_material_master.csv")
+        if not os.path.exists(master_path):
+            return False
+        try:
+            clusters = []
+            with open(master_path, mode="r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    specs = {}
+                    raw_specs = row.get("specifications")
+                    if raw_specs and raw_specs.strip():
+                        try:
+                            specs = json.loads(raw_specs)
+                        except Exception:
+                            specs = {}
+                    raw_cpses = row.get("affected_cpses", "")
+                    affected = [c.strip() for c in raw_cpses.split(",") if c.strip()]
+                    clusters.append({
+                        "cnmc_code": str(row["cnmc_code"]),
+                        "canonical_description": str(row["canonical_description"]),
+                        "category_id": str(row.get("category_id", "MISC_UNCLASSIFIED")),
+                        "category_name": str(row.get("category_name", "Unclassified")),
+                        "sector": str(row.get("sector", "Cross-Sector")),
+                        "standard_uom": str(row.get("standard_uom", "NOS")),
+                        "duplicate_count": int(row.get("duplicate_count", 1) or 1),
+                        "affected_cpses": affected,
+                        "specifications": specs,
+                    })
+            self.golden_clusters = clusters
+            logger.info(f"Loaded {len(clusters)} existing golden clusters from {master_path}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to auto-load existing catalog from {master_path}: {e}")
+            return False
+
+    def match_single_query(
+        self,
+        query_description: str = "",
+        query_spec_text: str = "",
+        query_uom: str = "NOS",
+        top_k: int = 5,
+        query_text: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Interactive search matching for AIMatching.jsx:
-        Takes raw material string, cleans it, extracts specs, classifies, and returns
-        top matching golden records with explainability reasoning.
+        Takes raw material description, optional specs and UOM, normalizes, extracts
+        attributes, classifies taxonomy, and returns top matching golden records.
         """
-        clean_query = self.preprocessor.normalize_text(query_text)
-        query_specs = self.attribute_extractor.extract(clean_query)
-        cls_result = self.classifier.classify(clean_query, "", query_specs)
+        # Backwards compatibility for single string argument
+        if query_text and not query_description:
+            query_description = query_text
+
+        clean_desc = self.preprocessor.normalize_text(query_description)
+        clean_spec = self.preprocessor.normalize_text(query_spec_text)
+        query_specs = self.attribute_extractor.extract(clean_desc, clean_spec)
+        cls_result = self.classifier.classify(clean_desc, clean_spec, query_specs)
         query_emb = np.array(cls_result["embedding"])
 
+        canonical_uom, _ = self.preprocessor.uom_harmonizer.canonicalize(query_uom)
+
         query_item = {
-            "cleaned_description": clean_query,
+            "cleaned_description": clean_desc,
+            "cleaned_spec_text": clean_spec,
             "specs": query_specs,
             "embedding": query_emb,
-            "canonical_uom": "NOS",
+            "canonical_uom": canonical_uom,
+            "source_uom": query_uom,
         }
+
+        # If golden clusters not in memory, attempt hydration
+        if not self.golden_clusters:
+            self.load_existing_catalog()
+
+        target_cats = set([cls_result["category_id"]])
+        for cat_cand, _ in cls_result.get("top_candidates", [])[:2]:
+            target_cats.add(cat_cand)
 
         candidates = []
         for cluster in self.golden_clusters:
-            # Check cluster specifications
+            # Category-aware candidate pre-filtering to eliminate O(N) full linear scans
+            c_cat = cluster.get("category_id", "MISC_UNCLASSIFIED")
+            if cls_result["category_id"] != "MISC_UNCLASSIFIED" and c_cat not in target_cats:
+                continue
+
+            cnmc = cluster["cnmc_code"]
+            if cnmc in self._canonical_embeddings:
+                c_emb = self._canonical_embeddings[cnmc]
+            else:
+                c_emb = self.classifier.encode_text(cluster["canonical_description"])
+                self._canonical_embeddings[cnmc] = c_emb
+
             cluster_specs = cluster.get("specifications", {})
             cluster_item = {
                 "cleaned_description": cluster["canonical_description"].lower(),
                 "specs": cluster_specs,
-                "embedding": self.classifier.encode_text(cluster["canonical_description"]),
+                "embedding": c_emb,
                 "canonical_uom": cluster.get("standard_uom", "NOS"),
             }
 
@@ -215,9 +297,12 @@ class MaterialHarmonizationPipeline:
         candidates.sort(key=lambda x: x["score"], reverse=True)
 
         return {
-            "query": query_text,
-            "cleaned_query": clean_query,
+            "query": query_description,
+            "query_spec_text": query_spec_text,
+            "cleaned_query": clean_desc,
+            "canonical_uom": canonical_uom,
             "predicted_category": cls_result["category_name"],
+            "category_id": cls_result["category_id"],
             "extracted_attributes": query_specs,
             "top_matches": candidates[:top_k]
         }

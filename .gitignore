@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -38,6 +38,7 @@ htmlcov/
 *.sqlite3
 
 # Large Model weights
+models/
 models/*.bin
 models/*.pt
 models/*.onnx
