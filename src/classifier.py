@@ -483,6 +483,91 @@ class DualLayerClassifier:
             "embedding": query_emb.tolist(),
         }
 
+    def classify_batch(
+        self,
+        cleaned_descriptions: List[str],
+        cleaned_spec_texts: List[str],
+        specs_list: List[Dict[str, Any]],
+        batch_size: int = 256,
+    ) -> List[Dict[str, Any]]:
+        """
+        High-throughput vectorized batch classification across thousands of items.
+        Returns list of classification result dicts with embeddings.
+        """
+        n = len(cleaned_descriptions)
+        combined_texts = [
+            f"{d} {s}".strip() for d, s in zip(cleaned_descriptions, cleaned_spec_texts)
+        ]
+
+        logger.info(f"Batch encoding {n} items with batch_size={batch_size}...")
+        embeddings = self.encode_batch(combined_texts, batch_size=batch_size)
+
+        logger.info(f"Computing anchor similarity matrix for {n} items...")
+        anchor_sims = np.dot(embeddings, self.anchor_matrix.T)
+
+        results = []
+        for i in range(n):
+            specs = specs_list[i] if i < len(specs_list) else {}
+            text = combined_texts[i]
+            emb = embeddings[i]
+
+            # Ambiguous triage rule
+            if specs.get("is_ambiguous"):
+                results.append({
+                    "category_id": "MISC_UNCLASSIFIED",
+                    "category_name": TAXONOMY["MISC_UNCLASSIFIED"]["name"],
+                    "confidence": 0.35,
+                    "method": "triage_rule",
+                    "reasoning": specs.get("ambiguity_reason", "Item lacks sufficient technical information"),
+                    "top_candidates": [("MISC_UNCLASSIFIED", 0.35)],
+                    "embedding": emb,
+                })
+                continue
+
+            # Exact keyword rule
+            rule_match = self.check_keyword_rules(text)
+            if rule_match:
+                cat_id, conf, reason = rule_match
+                results.append({
+                    "category_id": cat_id,
+                    "category_name": TAXONOMY[cat_id]["name"],
+                    "confidence": conf,
+                    "method": "exact_rule",
+                    "reasoning": reason,
+                    "top_candidates": [(cat_id, conf)],
+                    "embedding": emb,
+                })
+                continue
+
+            # Anchor categorization from precomputed anchor_sims[i]
+            row_sims = anchor_sims[i]
+            cat_max_sim = {cat_id: 0.0 for cat_id in self.category_ids}
+            for sim, cat_id in zip(row_sims, self.anchor_to_category):
+                if sim > cat_max_sim[cat_id]:
+                    cat_max_sim[cat_id] = float(sim)
+
+            ranked_cats = sorted(cat_max_sim.items(), key=lambda x: x[1], reverse=True)
+            top_cat_id, top_score = ranked_cats[0]
+            second_cat_id, second_score = ranked_cats[1]
+
+            if top_score >= 0.70 and (top_score - second_score >= 0.08):
+                reasoning = f"Closest exemplar anchor match with cosine similarity {top_score:.3f} (margin: +{top_score-second_score:.3f})"
+            else:
+                reasoning = f"Nearest embedding exemplar ({top_score:.3f} similarity to {TAXONOMY[top_cat_id]['name']})"
+
+            results.append({
+                "category_id": top_cat_id,
+                "category_name": TAXONOMY[top_cat_id]["name"],
+                "confidence": round(float(top_score), 3),
+                "method": "embedding_nearest_anchor",
+                "reasoning": reasoning,
+                "top_candidates": [(c, round(s, 3)) for c, s in ranked_cats[:3]],
+                "embedding": emb,
+            })
+
+        return results
+
 
 # Global singleton instance
 classifier = DualLayerClassifier()
+

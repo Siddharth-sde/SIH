@@ -1,8 +1,8 @@
 {
-  "total_materials_ingested": 400,
-  "unique_national_materials": 205,
-  "duplicates_rationalized": 195,
-  "rationalization_percentage": "48.8%",
-  "total_annual_spend_inr": 17795122851.23,
-  "estimated_procurement_savings_inr": "\u20b91,423,609,828.10"
+  "total_materials_ingested": 50000,
+  "unique_national_materials": 1517,
+  "duplicates_rationalized": 48483,
+  "rationalization_percentage": "97.0%",
+  "total_annual_spend_inr": 2589988123359.8,
+  "estimated_procurement_savings_inr": "\u20b9207,199,049,868.78"
 }

@@ -50,24 +50,33 @@ class MaterialHarmonizationPipeline:
         logger.info("Executing Stage 1: Text Preprocessing & UOM Harmonization")
         p_df = self.preprocessor.process_dataframe(df)
 
-        # Stage 2 & 3: Attribute Extraction & Dual-Layer Classification
-        logger.info("Executing Stages 2 & 3: Attribute Extraction & Classification")
+        # Stage 2: Attribute Extraction
+        logger.info(f"Executing Stage 2: Technical Attribute Extraction for {len(p_df)} items")
+        specs_list = [
+            self.attribute_extractor.extract(row["cleaned_description"], row["cleaned_spec_text"])
+            for _, row in p_df.iterrows()
+        ]
+
+        # Stage 3: Dual-Layer Vector Classification & Embedding
+        logger.info(f"Executing Stage 3: Vectorized Classification for {len(p_df)} items")
+        cls_results = self.classifier.classify_batch(
+            p_df["cleaned_description"].tolist(),
+            p_df["cleaned_spec_text"].tolist(),
+            specs_list,
+            batch_size=256
+        )
+
         self.processed_records = []
-        for idx, row in p_df.iterrows():
-            specs = self.attribute_extractor.extract(
-                row["cleaned_description"],
-                row["cleaned_spec_text"]
-            )
-            cls_result = self.classifier.classify(
-                row["cleaned_description"],
-                row["cleaned_spec_text"],
-                specs
-            )
+        plant_codes = df["plant_code"].tolist() if "plant_code" in df.columns else [""] * len(p_df)
+        sectors = df["sector"].tolist() if "sector" in df.columns else ["Cross-Sector"] * len(p_df)
+
+        for idx, (row, specs, cls_result) in enumerate(zip(p_df.to_dict(orient="records"), specs_list, cls_results)):
             self.processed_records.append({
                 "idx": idx,
                 "source_material_code": row["source_material_code"],
                 "cpse_id": row["cpse_id"],
-                "plant_code": df.iloc[idx].get("plant_code", ""),
+                "plant_code": plant_codes[idx],
+                "sector": sectors[idx],
                 "raw_description": row["raw_description"],
                 "raw_spec_text": row["raw_spec_text"],
                 "cleaned_description": row["cleaned_description"],
