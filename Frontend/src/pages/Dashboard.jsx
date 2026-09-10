@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getKPIs, getMLKPIs } from '../api/api';
 import { Spinner } from '../components/UI';
 import {
@@ -46,7 +46,7 @@ export default function Dashboard() {
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner size={32} /></div>;
 
-  const summary = kpis?.summary || {};
+  const summary = kpis?.summary || kpis || {};
   const finance = kpis?.financial_impact_crores || {};
 
   // Sector breakdown for pie chart (mock categories)
@@ -57,8 +57,8 @@ export default function Dashboard() {
 
   // Financial bar chart
   const financeBar = [
-    { name: 'Procurement Savings', value: mlKpis?.estimated_procurement_savings_inr ? parseFloat(mlKpis.estimated_procurement_savings_inr.replace(/[₹,]/g, '')) / 1e7 : 0 },
-    { name: 'Inventory Savings', value: summary?.total_materials ? (summary.total_materials * 0.001) : 0 },
+    { name: 'Procurement Savings', value: mlKpis?.estimated_procurement_savings_inr ? parseFloat(mlKpis.estimated_procurement_savings_inr.replace(/[₹,]/g, '')) / 1e7 : (kpis?.potential_procurement_savings_inr ? kpis.potential_procurement_savings_inr / 1e7 : 0) },
+    { name: 'Inventory Savings', value: summary?.total_materials ? (summary.total_materials * 0.001) : (kpis?.potential_inventory_reduction_inr ? kpis.potential_inventory_reduction_inr / 1e7 : 0) },
   ];
 
   return (
@@ -69,11 +69,11 @@ export default function Dashboard() {
       </div>
 
       <div className="kpi-grid">
-        <KPICard icon="📦" label="Total Materials Ingested" value={mlKpis?.total_materials_ingested?.toLocaleString() || summary?.total_materials?.toLocaleString() || '—'} color="blue" />
-        <KPICard icon="✅" label="Unique National Codes (CNMC)" value={mlKpis?.unique_national_materials?.toLocaleString() || summary?.unique_national_codes?.toLocaleString() || '—'} color="green" sub="AI Minted" />
-        <KPICard icon="♻" label="Duplicates Rationalized" value={mlKpis?.duplicates_rationalized?.toLocaleString() || summary?.duplicates_eliminated?.toLocaleString() || '—'} color="red" />
-        <KPICard icon="%" label="Rationalization Rate" value={mlKpis?.rationalization_percentage || summary?.rationalization_percentage || '—'} color="purple" sub="Catalog compression" />
-        <KPICard icon="💰" label="Annual Procurement Spend" value={mlKpis?.total_annual_spend_inr ? fmtCrore(mlKpis.total_annual_spend_inr) : finance?.annual_procurement_spend || '—'} color="yellow" />
+        <KPICard icon="📦" label="Total Materials Ingested" value={mlKpis?.total_materials_ingested?.toLocaleString() || summary?.total_materials?.toLocaleString() || kpis?.total_materials?.toLocaleString() || '—'} color="blue" />
+        <KPICard icon="✅" label="Unique National Codes (CNMC)" value={mlKpis?.unique_national_materials?.toLocaleString() || summary?.unique_national_codes?.toLocaleString() || kpis?.unique_national_codes?.toLocaleString() || '—'} color="green" sub="AI Minted" />
+        <KPICard icon="♻" label="Duplicates Rationalized" value={mlKpis?.duplicates_rationalized?.toLocaleString() || summary?.duplicates_eliminated?.toLocaleString() || kpis?.duplicate_materials?.toLocaleString() || '—'} color="red" />
+        <KPICard icon="%" label="Rationalization Rate" value={mlKpis?.rationalization_percentage || summary?.rationalization_percentage || (kpis?.duplicate_percentage ? `${kpis.duplicate_percentage}%` : '—')} color="purple" sub="Catalog compression" />
+        <KPICard icon="💰" label="Annual Procurement Spend" value={mlKpis?.total_annual_spend_inr ? fmtCrore(mlKpis.total_annual_spend_inr) : finance?.annual_procurement_spend || (kpis?.annual_procurement_value_inr ? fmtCrore(kpis.annual_procurement_value_inr) : '—')} color="yellow" />
       </div>
 
       <div className="grid-2" style={{ marginBottom: 24 }}>

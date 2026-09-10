@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { getKPIs, getMLKPIs } from '../api/api';
 import { Spinner } from '../components/UI';
 import {
@@ -24,7 +24,7 @@ export default function Analytics() {
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner size={32} /></div>;
 
-  const summary = kpis?.summary || {};
+  const summary = kpis?.summary || kpis || {};
   const finance = kpis?.financial_impact_crores || {};
   const ml = mlKpis || {};
 
@@ -135,7 +135,7 @@ export default function Analytics() {
         {/* Backend KPI Text Block */}
         <div className="card">
           <div className="card-header"><div className="card-title">🏛 Backend Platform KPIs</div></div>
-          {kpis?.message ? (
+          {kpis?.message && (!summary.total_materials && !kpis?.total_materials) ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
               <p>{kpis.message}</p>
               <p className="text-sm" style={{ marginTop: 8 }}>Upload material data using the Upload page to populate KPIs.</p>

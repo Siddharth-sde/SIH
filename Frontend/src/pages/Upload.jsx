@@ -1,5 +1,5 @@
-﻿import { useRef, useState } from 'react';
-import { uploadFile } from '../api/api';
+import { useRef, useState } from 'react';
+import { uploadFile, uploadAndHarmonize } from '../api/api';
 import { Spinner } from '../components/UI';
 import { useToast } from '../components/Toast';
 
@@ -8,6 +8,7 @@ export default function Upload() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [harmonizeMode, setHarmonizeMode] = useState(true);
   const fileRef = useRef();
   const toast = useToast();
 
@@ -15,7 +16,8 @@ export default function Upload() {
     if (!file) return;
     setLoading(true); setResult(null); setError(null);
     try {
-      const res = await uploadFile(file);
+      const uploader = harmonizeMode ? uploadAndHarmonize : uploadFile;
+      const res = await uploader(file);
       if (res.detail) throw new Error(res.detail);
       setResult(res);
       toast(res.message || 'File uploaded successfully', 'success');
@@ -42,6 +44,22 @@ export default function Upload() {
       <div className="grid-2">
         <div>
           <div className="card">
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <button
+                className={`btn ${harmonizeMode ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ flex: 1, fontSize: 12 }}
+                onClick={() => setHarmonizeMode(true)}
+              >
+                ✦ Ingest & AI Harmonize
+              </button>
+              <button
+                className={`btn ${!harmonizeMode ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ flex: 1, fontSize: 12 }}
+                onClick={() => setHarmonizeMode(false)}
+              >
+                📁 Raw Ingest Only
+              </button>
+            </div>
             <div
               className={`dropzone ${dragging ? 'dragover' : ''}`}
               onClick={() => fileRef.current.click()}

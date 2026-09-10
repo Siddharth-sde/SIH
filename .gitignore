@@ -34,8 +34,15 @@ htmlcov/
 
 # Databases
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
+
+# Frontend
+Frontend/node_modules/
+Frontend/dist/
+node_modules/
 
 # Large Model weights
 models/

@@ -1,4 +1,4 @@
-﻿const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const ML_URL = import.meta.env.VITE_ML_URL || 'http://localhost:8001';
 
 // ── Backend APIs ──────────────────────────────────────────────────────────────
@@ -14,12 +14,24 @@ export const getMaterials = (params = {}) => {
 };
 
 export const getClusters = (limit = 25) =>
-  fetch(`${BACKEND_URL}/api/duplicates/clusters?limit=${limit}`).then(r => r.json());
+  fetch(`${BACKEND_URL}/api/duplicates/clusters?limit=${limit}`)
+    .then(r => r.json())
+    .then(d => (Array.isArray(d) ? d : (d.clusters || [])));
 
 export const uploadFile = (file) => {
   const fd = new FormData();
   fd.append('file', file);
   return fetch(`${BACKEND_URL}/api/upload`, { method: 'POST', body: fd }).then(r => r.json());
+};
+
+export const uploadAndHarmonize = (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd })
+    .then(r => {
+      if (!r.ok) return r.json().then(err => Promise.reject(new Error(err.detail || 'Harmonization failed')));
+      return r.json();
+    });
 };
 
 export const updateMaterialStatus = (id, action) =>

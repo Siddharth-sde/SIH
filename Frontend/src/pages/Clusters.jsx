@@ -16,8 +16,8 @@ function ClusterCard({ cluster }) {
         <div>
           <h3>{cluster.cnmc}</h3>
           <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-            <Badge color="blue">{cluster.total_duplicates} variants</Badge>
-            {cluster.cpses_involved.map(c => <Badge key={c} color="gray">{c}</Badge>)}
+            <Badge color="blue">{cluster.total_duplicates ?? cluster.material_count ?? (cluster.materials?.length || 0)} variants</Badge>
+            {(cluster.cpses_involved || []).map(c => <Badge key={c} color="gray">{c}</Badge>)}
             {spread && parseFloat(spread) > 5 && (
               <Badge color="red">⚠ {spread}% price spread</Badge>
             )}
@@ -69,7 +69,8 @@ export default function Clusters() {
     setLoading(true);
     try {
       const data = await getClusters(lim);
-      setClusters(data);
+      const list = Array.isArray(data) ? data : (data?.clusters || []);
+      setClusters(list);
     } catch {
       toast('Failed to load clusters', 'error');
     } finally {
@@ -79,7 +80,8 @@ export default function Clusters() {
 
   useEffect(() => { load(limit); }, [limit]);
 
-  const totalDupes = clusters.reduce((s, c) => s + c.total_duplicates, 0);
+  const clusterList = Array.isArray(clusters) ? clusters : [];
+  const totalDupes = clusterList.reduce((s, c) => s + (c.total_duplicates ?? c.material_count ?? (c.materials?.length || 0)), 0);
 
   return (
     <div>
@@ -91,7 +93,7 @@ export default function Clusters() {
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <div className="kpi-card">
           <div className="kpi-icon blue"><span style={{ fontSize: 20 }}>◎</span></div>
-          <div><div className="kpi-value">{clusters.length}</div><div className="kpi-label">Clusters Shown</div></div>
+          <div><div className="kpi-value">{clusterList.length}</div><div className="kpi-label">Clusters Shown</div></div>
         </div>
         <div className="kpi-card">
           <div className="kpi-icon red"><span style={{ fontSize: 20 }}>♻</span></div>
@@ -100,8 +102,8 @@ export default function Clusters() {
         <div className="kpi-card">
           <div className="kpi-icon yellow"><span style={{ fontSize: 20 }}>⚠</span></div>
           <div>
-            <div className="kpi-value">{clusters.filter(c => {
-              const prices = c.materials.map(m => m.unit_price).filter(p => p > 0);
+            <div className="kpi-value">{clusterList.filter(c => {
+              const prices = (c.materials || []).map(m => m.unit_price).filter(p => p > 0);
               if (prices.length < 2) return false;
               const spread = (Math.max(...prices) - Math.min(...prices)) / Math.min(...prices) * 100;
               return spread > 10;
@@ -113,7 +115,7 @@ export default function Clusters() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div className="text-sm text-muted">Showing top <strong>{clusters.length}</strong> duplicate clusters</div>
+          <div className="text-sm text-muted">Showing top <strong>{clusterList.length}</strong> duplicate clusters</div>
           <div className="input-row">
             <select className="input" style={{ width: 120 }} value={limit} onChange={e => setLimit(Number(e.target.value))}>
               {[10, 25, 50, 100].map(n => <option key={n}>{n}</option>)}
@@ -125,11 +127,11 @@ export default function Clusters() {
 
       {loading ? (
         <div style={{ padding: 40, textAlign: 'center' }}><Spinner size={32} /></div>
-      ) : clusters.length === 0 ? (
+      ) : clusterList.length === 0 ? (
         <EmptyState title="No duplicate clusters found" desc="Upload data with CNMC codes to see clustering results." />
       ) : (
         <div>
-          {clusters.map(c => <ClusterCard key={c.cnmc} cluster={c} />)}
+          {clusterList.map(c => <ClusterCard key={c.cnmc} cluster={c} />)}
         </div>
       )}
     </div>
