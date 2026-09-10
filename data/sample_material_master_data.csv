@@ -1,0 +1,26 @@
+cpse_id,sector,source_material_code,material_description,technical_spec_text,uom,existing_material_group
+CPSE_A,Oil & Gas,OG-10023,GATE VLV 150NB CL150 CS BODY,"Gate valve, cast steel body, 150NB, Class 150, flanged ends, API 600 design",NOS,VALVES-GEN
+CPSE_C,Steel,ST-77410,Valve Gate 6in CS Flanged Class150,"Cast steel gate valve, 6 inch nominal bore, ANSI Class 150, RF flanged ends, per API 600",EA,PIPE-FITTINGS
+CPSE_A,Oil & Gas,OG-10450,GASKET SPWD 150NB CL150 SS316/GRAPH,"Spiral wound gasket, 150NB, Class 150, SS316 winding with graphite filler, per ASME B16.20",NOS,GASKETS
+CPSE_D,Mining,MN-33290,Gasket spiral wound 6inch cl150 ss316,"Spiral wound type gasket, size 6 inch, pressure class 150#, SS316 strip with graphite filler, per ASME B16.20",EA,SEALS
+CPSE_B,Power,PW-77021,Transformer Oil filled 25MVA 33/11kV,"Power transformer, oil-cooled (ONAN), 25 MVA, 33kV/11kV, Dyn11 vector group, per IS 2026",NOS,TRANSFORMERS
+CPSE_B,Power,PW-77500,11kV XLPE Cable 3Cx400sqmm Al,"XLPE insulated armoured aluminium conductor cable, 11kV, 3 core x 400 sq mm, per IS 7098",MTR,CABLES-POWER
+CPSE_E,Heavy Engineering,HE-40012,CABLE XLPE 11KV 3Cx400 ALU ARM,"11kV grade XLPE cable, aluminium conductor, 3 core, 400 sqmm, armoured, per IS 7098 Part 2",MTR,ELEC-CONSUMABLES
+CPSE_D,Mining,MN-55012,Wire Rope 32mm 6x36 IWRC,"Steel wire rope, 32mm diameter, construction 6x36 IWRC, tensile grade 1770, per IS 2266",MTR,ROPES-CHAINS
+CPSE_C,Steel,ST-90341,MS PLATE 12MM IS2062 GR B,"Hot rolled mild steel plate, 12mm thickness, 2000x6000mm, IS 2062 Grade B",MT,PLATES-SHEETS
+CPSE_C,Steel,ST-90512,Roll Neck Bearing 200mm Bore SKF type,"Spherical roller bearing for mill roll neck, bore 200mm, heavy duty, SKF 232 series equivalent",NOS,MILL-SPARES
+CPSE_E,Heavy Engineering,HE-51002,Bearing SRB 200mm bore Type 232,"Spherical roller bearing, bore diameter 200mm, series 232, for heavy rotating machinery",NOS,BEARINGS
+CPSE_A,Oil & Gas,OG-21044,Bearing Sph Roller 200mm bore hvy duty,"Spherical roller bearing 200mm bore, heavy duty type 232, for pump shaft support",NOS,ROTATING-SPARES
+CPSE_D,Mining,MN-61230,Conveyor Belt 1200mm 4Ply Rubber,"Rubber conveyor belt, 1200mm width, 4 ply nylon fabric, EP grade, 8mm top / 4mm bottom cover",MTR,BELTING
+CPSE_E,Heavy Engineering,HE-71100,Gearbox Helical 50HP ratio 20:1,"Helical gearbox, input 50HP, reduction ratio 20:1, foot mounted, per IS 7347",NOS,GEARBOXES
+CPSE_B,Power,PW-81023,Insulator Disc Type 11kV Porcelain,"Porcelain disc insulator, 11kV class, ball and socket type, per IS 731",NOS,INSULATORS
+CPSE_A,Oil & Gas,OG-33012,Flange WNRF 150NB CL300 A105,"Weld neck raised face flange, 150NB, Class 300, forged carbon steel ASTM A105",NOS,FLANGES
+CPSE_C,Steel,ST-10982,Refractory Brick Fireclay 230x115x65,"Fireclay refractory bricks, standard size 230x115x65mm, for furnace lining",NOS,REFRACTORIES
+CPSE_D,Mining,MN-90044,Drill Bit Tricone 8.5in IADC 517,"Tricone rock drill bit, 8-1/2 inch diameter, IADC code 517, TCI type",NOS,DRILLING-TOOLS
+CPSE_E,Heavy Engineering,HE-88213,Electric Motor 3Ph 415V 50HP TEFC,"Squirrel cage induction motor, 3 phase, 415V, 50Hz, 50HP, TEFC enclosure, per IS 325",NOS,MOTORS
+CPSE_A,Oil & Gas,OG-90210,Motor Induction 50HP 415V TEFC Type,"3 phase induction motor, TEFC, 415V/50Hz, rated 50HP, for pump drive",NOS,ELECT-MOTORS
+CPSE_B,Power,PW-40098,MCCB 400A 4Pole 36kA,"Moulded case circuit breaker, 400A frame, 4 pole, 36kA breaking capacity, per IS/IEC 60947-2",NOS,SWITCHGEAR
+CPSE_C,Steel,ST-55021,Billet MS 100x100mm Sq 6mtr length,"Continuous cast mild steel billet, 100x100mm square section, 6 metre length",MT,SEMIS
+CPSE_D,Mining,MN-10087,Crusher Liner Manganese Steel Jaw type,"Manganese steel wear liner for jaw crusher, high-Mn (Hadfield) steel casting",NOS,WEAR-PARTS
+CPSE_E,Heavy Engineering,HE-20099,Fastener Hex Bolt M24x100 GR8.8,"Hex head bolt, M24 x 100mm, property class 8.8, zinc plated, per IS 1364",NOS,FASTENERS
+CPSE_A,Oil & Gas,OG-45521,Item desc unclear - Pt No 4471B misc spare,"Miscellaneous spare part, refer drawing 4471B, material unspecified",NOS,MISC
