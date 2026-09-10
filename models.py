@@ -7,24 +7,23 @@ class MaterialMaster(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     
-    # 7 Core Standardized Columns (Always present)
-    material_code = Column(String(100), index=True)      # Any code (source_material_code, legacy_material_code, MATNR)
-    description = Column(String(500), index=True)        # The raw description
-    cpse_name = Column(String(100), index=True)          # CPCL, ONGC, NTPC, etc.
-    sector = Column(String(100), index=True)             # Oil & Gas, Power, etc.
-    uom = Column(String(50), default="NOS")              # Unit of measure
-    unit_price = Column(Float, default=0.0)              # Price in INR
-    stock_qty = Column(Integer, default=0)               # Current stock / inventory
-    annual_qty = Column(Integer, default=0)              # Annual consumption
+    # 7 Core Normalized Columns
+    material_code = Column(String(100), index=True)
+    description = Column(String(500), index=True)
+    cpse_name = Column(String(100), index=True)
+    sector = Column(String(100), index=True)
+    uom = Column(String(50), default="NOS")
+    unit_price = Column(Float, default=0.0)
+    stock_qty = Column(Integer, default=0)
+    annual_qty = Column(Integer, default=0)
     
-    # Harmonization & Registry Output
-    cnmc_code = Column(String(100), index=True, default="PENDING")
+    # Harmonization Fields
+    cnmc_code = Column(String(100), index=True, default="PENDING_HARMONIZATION")
     standardized_description = Column(String(500), default="")
-    status = Column(String(50), default="ACTIVE")        # ACTIVE, PENDING_REVIEW, APPROVED, REJECTED
+    status = Column(String(50), default="ACTIVE")
     
-    # Universal Dynamic Storage: Any other columns (bucket, specs, plant, vendor, etc.) go here as JSON
+    # Extensible metadata (stores specifications, plant, bucket, quality scores)
     extra_data = Column(Text, default="{}")
-    
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class AuditLog(Base):
@@ -32,7 +31,7 @@ class AuditLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     material_code = Column(String(100))
-    action = Column(String(50))                          # e.g., "MERGED", "APPROVED", "REJECTED"
-    performed_by = Column(String(100), default="SYSTEM_ADMIN")
+    action = Column(String(50))
+    performed_by = Column(String(100), default="dashboard_user")
     notes = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
