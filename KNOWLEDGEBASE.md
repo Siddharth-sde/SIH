@@ -3,7 +3,9 @@
 > **Smart India Hackathon (SIH 2026)**  
 > **Topic:** AI-Driven Material Catalog Harmonization, Deduplication & Common National Material Code (CNMC) Generation for Indian Central Public Sector Enterprises (CPSEs).  
 > **Repository:** `https://github.com/Siddharth-sde/SIH.git`  
-> **Target Host:** Fedora Linux (`klassje@revachol`) with Podman Rootless & NVIDIA RTX 3050.
+> **Target OS:** Fedora Linux (`klassje@revachol`)  
+> **Target Architecture:** 3 Podman Containers (Ollama + ML Engine + Backend/Frontend Host)  
+> **Access Model:** Unprivileged user `klassje` with direct SDDM graphical login, fully isolated from admin `louise`.
 
 ---
 
@@ -29,43 +31,125 @@ The **National Unified Material Master Platform** is an end-to-end AI-powered sy
 - **Duplicates Rationalized:** 48,483 items (**96.97% catalog rationalization rate**).
 - **Annual Procurement Spend:** ₹258,998 Crore (~₹259.0K Cr).
 - **Demand Aggregation Savings (10% bulk procurement):** **₹25,899.88 Crore**.
-- **Locked Inventory Value:** ₹80,642 Crore (~₹80.6K Cr).
+- **Total Locked Inventory Value:** ₹80,642 Crore (~₹80.6K Cr).
 - **Inventory Holding Cost Reduction (15% rationalization):** **₹12,096.30 Crore**.
 - **Total Combined Fiscal Value:** **₹37,996+ Crore**.
 
 ---
 
-## 2. Architecture & Data Flow
+## 2. Final 3-Container Podman Architecture
+
+The production and demo deployment is strictly encapsulated into **three rootless Podman containers** running under the unprivileged user `klassje`:
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│               FRONTEND UI (React 19 + Vite 8 + Recharts)               │
-│  Dashboard | Batch Upload | Material Master | Clusters | AI Match      │
-└───────────────────┬────────────────────────────────┬───────────────────┘
-                    │ :8000                          │ :8001
-                    ▼                                ▼
-┌──────────────────────────────────────┐  ┌──────────────────────────────┐
-│        BACKEND API GATEWAY           │  │   ML HARMONIZATION SERVICE   │
-│  - FastAPI Gateway                   │  │  - FastAPI Microservice      │
-│  - SQLite (materials, audit_logs)    │  │  - 4-Stage AI Pipeline       │
-│  - Cold-Start Dataset Seeding        │  │  - 1,517 Golden Index Cache  │
-│  - Governance Action Handlers        │  │  - PyTest Automated Suite    │
-│  - ML Proxy Bridge                   │  │    (44/44 passing)           │
-└───────────────────┬──────────────────┘  └──────────────┬───────────────┘
-                    │                                    │ :11434
-                    │ HTTP Proxy                         ▼
-                    └───────────────────────────► ┌──────────────────────┐
-                                                  │   OLLAMA CONTAINER   │
-                                                  │   qwen2.5:3b         │
-                                                  │   (NVIDIA GPU)       │
-                                                  └──────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             CONTAINER 3: sih_app_host                            │
+│                 Unified Backend Gateway + Frontend Web Server                    │
+│                                                                                  │
+│   ┌────────────────────────────────┐         ┌───────────────────────────────┐   │
+│   │     Nginx Web Server (:5173)   │         │     FastAPI Gateway (:8000)   │   │
+│   │  - Serves React 19 + Vite SPA  │ ──────► │  - Material Master CRUD       │   │
+│   │  - Proxies /api/ to port 8000  │  Proxy  │  - SQLite (materials, audit)  │   │
+│   └────────────────────────────────┘         │  - Cold-Start Data Seeding    │   │
+│                                              │  - Governance Action Handlers │   │
+│                                              └───────────────┬───────────────┘   │
+└──────────────────────────────────────────────────────────────┼───────────────────┘
+                                                               │ HTTP Proxy Bridge
+                                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                           CONTAINER 2: sih_ml_service                            │
+│                         ML Harmonization Microservice                            │
+│                                                                                  │
+│   - FastAPI Microservice running on Port 8001                                    │
+│   - 4-Stage AI Pipeline: Preprocessor → Extractor → Classifier → Matcher         │
+│   - 1,517 Golden Cluster Vector Index in RAM (SentenceTransformer MiniLM)        │
+│   - Automated Test Suite: 44/44 passing                                          │
+└──────────────────────────────────────┬───────────────────────────────────────────┘
+                                       │ HTTP (:11434)
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            CONTAINER 1: sih_ollama                               │
+│                         Local LLM Engine (GPU-Accelerated)                       │
+│                                                                                  │
+│   - Docker Image: docker.io/ollama/ollama:latest                                │
+│   - Hardware Passthrough: NVIDIA GeForce RTX 3050 via CDI (nvidia.com/gpu=all)   │
+│   - Serving: qwen2.5:3b on Port 11434                                            │
+│   - Persistent Volume: ollama-storage                                            │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Container Topology Summary:
+1. **Container 1 (`sih_ollama`)**: Hardware-accelerated LLM engine running `qwen2.5:3b`. Listens on port `11434`.
+2. **Container 2 (`sih_ml_service`)**: Deterministic and vector harmonization engine built from `ML/Dockerfile.ml`. Listens on port `8001`. Connects to Container 1 for ambiguous taxonomy verification.
+3. **Container 3 (`sih_app_host`)**: Multi-stage unified container built from `Dockerfile.app`. Runs internal Uvicorn on port `8000` (FastAPI backend + SQLite) and Nginx on port `5173` (serving production React bundle and reverse-proxying `/api/` to port 8000).
+
+---
+
+## 3. Security & Privilege Isolation Playbook (`louise` vs `klassje`)
+
+To prevent the demo/agent user (`klassje`) from accessing the admin user's files (`louise`) or modifying the system, execute this least-privilege lockdown.
+
+### 3.1 Commands to run as `louise` (using `sudo`):
+
+```bash
+# ---------------------------------------------------------
+# 1. HARDEN ADMIN HOME DIRECTORY (ZERO VISIBILITY FOR KLASSJE)
+# ---------------------------------------------------------
+# Set louise's home directory to 0700 so no other user can read or enter it
+sudo chmod 700 /home/louise
+
+# Remove any lingering POSIX ACLs that might grant read access
+sudo setfacl -b /home/louise
+
+# ---------------------------------------------------------
+# 2. STRIP ADMINISTRATIVE PRIVILEGES FROM KLASSJE
+# ---------------------------------------------------------
+# Ensure klassje is NOT in wheel, adm, or systemd-journal
+sudo gpasswd -d klassje wheel 2>/dev/null || true
+sudo gpasswd -d klassje adm 2>/dev/null || true
+sudo gpasswd -d klassje systemd-journal 2>/dev/null || true
+
+# Verify no sudoers entries grant privileges to klassje
+sudo grep -rn "klassje" /etc/sudoers /etc/sudoers.d/ || true
+
+# ---------------------------------------------------------
+# 3. CONFIGURE MINIMUM PRIVILEGES REQUIRED FOR FUNCTIONALITY
+# ---------------------------------------------------------
+# Grant access to GPU devices for rootless container hardware acceleration
+sudo usermod -aG video,render klassje
+
+# Ensure rootless Podman subuid/subgid ranges are mapped
+sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 klassje 2>/dev/null || true
+
+# Allow user background services to run without an active session
+sudo loginctl enable-linger klassje
+
+# Open presentation ports in the Fedora firewall for LAN / Wi-Fi access
+sudo firewall-cmd --permanent --add-port={5173,8000,8001}/tcp
+sudo firewall-cmd --reload
+```
+
+### 3.2 Audit Verification Checklist:
+Run these quick tests to guarantee isolation before starting the session:
+```bash
+# Check group memberships (MUST NOT contain wheel or adm):
+groups klassje
+# Expected output: klassje : klassje video render
+
+# Test access to louise from klassje (MUST FAIL):
+sudo -u klassje ls -la /home/louise
+# Expected output: ls: cannot open directory '/home/louise': Permission denied
+
+# Test GPU device access from klassje (MUST SUCCEED):
+sudo -u klassje ls -la /dev/nvidia* /dev/dri/renderD128
+# Expected output: crw-rw----+ 1 root video ...
 ```
 
 ---
 
-## 3. Component Deep Dive
+## 4. Component Deep Dive
 
-### 3.1 ML Harmonization Microservice (`ML/`)
+### 4.1 ML Harmonization Microservice (`ML/`)
 Built with FastAPI, NumPy, Pandas, Scikit-learn, Sentence-Transformers, and Ollama. Runs on port `8001`.
 
 #### Stage 1: Preprocessor (`src/preprocessor.py`)
@@ -108,35 +192,25 @@ Classifies materials into 10 industrial categories:
 
 ---
 
-### 3.2 Backend Gateway (`Backend/main.py` & `main.py`)
-Built with FastAPI and SQLAlchemy. Runs on port `8000`.
+### 4.2 Backend Gateway & Frontend Host (`sih_app_host`)
+Runs inside Container 3 on ports `8000` and `5173`.
 
-- **Dual Schema Support:** Tables `materials` and `material_master` are fully aligned.
-- **Audit Logging:** Every administrative action (`APPROVE`, `REJECT`) creates an immutable row in `audit_logs`.
-- **Dynamic File Ingestion:** Supports CSV, XLSX, and PDF (via `pdfplumber`).
-- **Universal Column Mapping:** Heuristic `ALIASES` dictionary maps diverse CPSE column names (`item_code`, `mat_no`, `desc`, `short_text`, `price`, `rate`, `stock_qty`, etc.) into canonical fields.
-- **Cold-Start Auto-Seeding:** Discovers candidate dataset files on first startup (`cpse_material_master_all.csv`, `material_master_input_50000(1).csv`, etc.) and hydrates SQLite automatically.
-- **ML Proxy Gateway:** Proxies `/api/ml/match-single` with full parameter forwarding and graceful local fallback.
-- **High-Throughput Batch Processing:** Uses `bulk_insert_mappings` in batches of 5,000 for rapid data ingestion.
-
----
-
-### 3.3 Frontend Application (`Frontend/`)
-Built with React 19, Vite 8, Lucide Icons, and Recharts. Runs on port `5173`.
-
-- **Dashboard:** Real-time KPI counters (Materials, CNMCs, Rationalization %, Spend, Savings), Category Breakdown Chart, and Financial Impact Comparisons.
-- **Batch Upload (`Upload.jsx`):** Drag-and-drop file upload with a dual-mode switch:
-  * **✦ Ingest & AI Harmonize:** Forwards file to ML microservice for real-time 4-stage processing and stores golden records.
-  * **📁 Raw Ingest Only:** Ingests raw data directly into the database for manual review.
-- **Material Master Browser (`Materials.jsx`):** Paginated table supporting search, sector filtering, CPSE filtering, and inline APPROVE/REJECT actions.
-- **Duplicate Clusters (`Clusters.jsx`):** Visualizes variants grouped by minted CNMC, displaying price spread variance across CPSEs.
-- **AI Semantic Matcher (`AIMatch.jsx`):** Interactive query console to test semantic matches against the 1,517 pre-indexed golden clusters in ~15ms.
-- **Financial Analytics (`Analytics.jsx`):** Visualizes demand consolidation opportunities and holding cost reduction targets.
-- **Network Resilience:** Dynamically resolves API endpoints using `window.location.hostname`, allowing seamless access across local WiFi/LAN during presentations.
+- **FastAPI Gateway (:8000):**
+  * **Dual Schema Support:** Tables `materials` and `material_master` are fully aligned.
+  * **Audit Logging:** Every administrative action (`APPROVE`, `REJECT`) creates an immutable row in `audit_logs`.
+  * **Dynamic File Ingestion:** Supports CSV, XLSX, and PDF (via `pdfplumber`).
+  * **Universal Column Mapping:** Heuristic `ALIASES` dictionary maps diverse CPSE column names (`item_code`, `mat_no`, `desc`, `short_text`, `price`, `rate`, `stock_qty`, etc.) into canonical fields.
+  * **Cold-Start Auto-Seeding:** Discovers candidate dataset files on first startup (`cpse_material_master_all.csv`, `material_master_input_50000(1).csv`, etc.) and hydrates SQLite automatically.
+  * **ML Proxy Gateway:** Proxies `/api/ml/match-single` with full parameter forwarding and graceful local fallback.
+  * **High-Throughput Batch Processing:** Uses `bulk_insert_mappings` in batches of 5,000 for rapid data ingestion.
+- **Nginx Web Server (:5173):**
+  * Serves optimized production build of the React 19 + Vite 8 SPA.
+  * Internal reverse proxy routing: `/api/*` requests arriving on port 5173 are passed directly to `127.0.0.1:8000/api/*`, completely eliminating CORS issues.
+  * Dynamic host evaluation: resolves endpoints using `window.location.hostname`, ensuring seamless operation when accessed via external laptops/tablets across Wi-Fi.
 
 ---
 
-## 4. History of Audits, Gaps Found & How They Were Fixed
+## 5. History of Audits, Gaps Found & How They Were Fixed
 
 | Subsystem | Initial Audit Gap | Permanent Architectural Fix |
 |:---|:---|:---|
@@ -149,10 +223,11 @@ Built with React 19, Vite 8, Lucide Icons, and Recharts. Runs on port `5173`.
 | **KPI Schema Mismatch** | Frontend expected nested `summary` and `financial_impact_crores`; backend sent flat keys. | Backend updated to return both nested and flat keys; frontend given fallback chains (`summary?.x \|\| kpis?.x`). |
 | **Non-Functional Tests** | Test suite crashed with missing imports and hardcoded length assertions. | Re-architected test suite into 44 independent pytest test cases with 100% pass rate. |
 | **Local Network Presentation** | Vite bound to `localhost`; API URLs hardcoded to `localhost`, breaking LAN demos. | Vite configured with `host: 0.0.0.0`; `api.js` dynamic hostname resolution via `window.location.hostname`. |
+| **Multi-Container Sprawl** | Separate containers for frontend, backend, and proxies increased failure points. | Unified into a 3-container topology: Ollama, ML Service, and App Host (Backend + Frontend). |
 
 ---
 
-## 5. Database Schema Reference
+## 6. Database Schema & API Reference
 
 ### Table: `materials` (SQLAlchemy `MaterialMaster`)
 ```sql
@@ -186,208 +261,58 @@ CREATE TABLE audit_logs (
 );
 ```
 
----
-
-## 6. Complete API Endpoint Specification
-
-### Backend Gateway (`:8000`)
-- `GET /` — Health check (`{"service": "National Unified Material Master Platform", "status": "online"}`).
-- `GET /api/materials?q=&sector=&cpse=&limit=50&offset=0` — Paginated material catalog.
-- `GET /api/analytics/kpis` — Aggregate inventory, spend, duplicate counts, and savings estimates.
-- `GET /api/analytics/opportunities?top_n=10` — Top CNMC clusters ranked by demand aggregation savings.
-- `GET /api/duplicates/clusters?limit=25` — Variant clusters grouped under minted CNMCs.
-- `POST /api/materials/{id}/action?action=APPROVE|REJECT` — Human-in-the-loop catalog governance.
-- `GET /api/audit?limit=50` — Immutable audit trail of governance actions.
-- `POST /api/upload` — Multipart file upload (CSV, XLSX, PDF) storing raw records.
-- `POST /api/upload-and-harmonize` — Multipart upload piping file to ML microservice and persisting harmonized results.
-- `POST /api/ml/match-single` — Gateway proxy forwarding semantic match queries to ML engine.
-
-### ML Microservice (`:8001`)
-- `GET /health` — Microservice health, engine version, and number of indexed golden clusters.
-- `GET /api/ml/kpis` — Returns processing metrics from `data/processed/dashboard_kpis.json`.
-- `POST /api/ml/match-single` — Fast semantic match returning top-K matches with confidence and reasoning.
-  * Body: `{"query_description": "...", "query_spec_text": "...", "query_uom": "NOS", "top_k": 5}`
-- `POST /api/ml/harmonize-batch` — Multipart CSV upload running full 4-stage pipeline; returns crosswalk and KPIs.
-- `POST /api/ml/harmonize-batch-json` — Direct JSON payload batch harmonization.
+### Key API Endpoints
+- **Frontend / Unified Web UI:** `http://localhost:5173/`
+- **Backend API Gateway:** `http://localhost:8000/docs`
+  * `GET /api/materials` — Search, filter, and paginate through materials.
+  * `GET /api/analytics/kpis` — Aggregate financial impact and rationalization statistics.
+  * `GET /api/duplicates/clusters` — Grouped variants sharing minted CNMC codes.
+  * `POST /api/materials/{id}/action` — Approve/Reject material governance actions.
+  * `POST /api/upload-and-harmonize` — Stream CSV to ML microservice and store harmonized master records.
+  * `POST /api/ml/match-single` — Proxy gateway for single-item semantic queries.
+- **ML Harmonization Engine:** `http://localhost:8001/docs`
+  * `GET /health` — Health status and count of indexed golden clusters (1,517).
+  * `POST /api/ml/match-single` — Direct semantic matching endpoint.
+  * `POST /api/ml/harmonize-batch` — Batch CSV ingestion pipeline.
+- **Ollama Engine:** `http://localhost:11434/`
+  * `POST /api/generate` & `POST /api/chat` — `qwen2.5:3b` inference.
 
 ---
 
-## 7. Migration Playbook for Fedora (`klassje@revachol`)
+## 7. Fedora Target Host Deployment (`klassje@revachol`)
 
-### 7.1 Target Environment Profile
-- **Host:** `revachol` (Fedora Linux)
-- **User:** `klassje` (unprivileged account)
-- **GPU:** NVIDIA GeForce RTX 3050 Laptop GPU (4GB VRAM, CUDA 13.3)
-- **Ollama Status:** Already deployed and running on host via rootless Podman on port `11434` (`qwen2.5:3b` pulled).
+### 7.1 Direct Login Workflow
+1. At the **SDDM login screen**, select user **`klassje`**.
+2. Log in directly to the graphical desktop session (KDE Wayland/X11).
 
----
-
-### 7.2 Systemwide Prerequisites (USER SUDO REQUIRED)
-Because you are logged in as the unprivileged user `klassje`, please run the following one-time system setup commands using `sudo`:
+### 7.2 Launching the 3 Containers
+Open a terminal as `klassje`:
 
 ```bash
-# 1. Install development tools and rootless Podman compose
-sudo dnf install -y git podman podman-compose nodejs npm python3 python3-pip
+# 1. Clone or pull the repository
+git clone https://github.com/Siddharth-sde/SIH.git
+cd SIH
 
-# 2. Open presentation ports in the Fedora firewall for LAN / Wi-Fi access
-sudo firewall-cmd --permanent --add-port={5173,8000,8001}/tcp
-sudo firewall-cmd --reload
-
-# 3. (Optional) Enable lingering so user containers and systemd services persist
-loginctl enable-linger klassje
+# 2. Deploy the 3-container stack
+./run-containers.sh
 ```
 
----
+The script automatically detects if your existing Ollama container is already running on port 11434 and brings up the ML microservice and Unified App Host:
+* **Container 1 (`sih_ollama`):** Port `11434`
+* **Container 2 (`sih_ml_service`):** Port `8001`
+* **Container 3 (`sih_app_host`):** Ports `8000` & `5173`
 
-### 7.3 Deployment Option A: Containerized via Podman Rootless (Recommended)
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Siddharth-sde/SIH.git
-   cd SIH
-   ```
-
-2. **Configure Environment:**
-   Ensure `Frontend/.env` exists:
-   ```bash
-   cp Frontend/.env.example Frontend/.env
-   ```
-
-3. **Launch Stack:**
-   ```bash
-   ./run-containers.sh
-   # Or directly:
-   podman compose up -d --build
-   ```
-
-4. **Verify Container Health:**
-   ```bash
-   podman ps
-   curl -s http://localhost:8000/
-   curl -s http://localhost:8001/health
-   ```
-
----
-
-### 7.4 Deployment Option B: Local Native Processes (Alternative)
-
-1. **Setup Python Virtual Environment:**
-   ```bash
-   cd SIH
-   python3 -m venv .venv
-   .venv/bin/pip install --upgrade pip
-   .venv/bin/pip install -r Backend/requirements.txt -r ML/requirements.txt pytest
-   ```
-
-2. **Setup Frontend:**
-   ```bash
-   cd Frontend
-   npm ci
-   cd ..
-   ```
-
-3. **Run All Services via Single Command:**
-   ```bash
-   ./run-local.sh
-   ```
-
----
-
-### 7.5 Systemd Rootless User Services (Autostart on Fedora)
-
-To manage the application using Fedora's user-level systemd daemon (`systemctl --user`), create user service units:
-
-1. **Directory:**
-   ```bash
-   mkdir -p ~/.config/systemd/user
-   ```
-
-2. **ML Service (`~/.config/systemd/user/sih-ml.service`):**
-   ```ini
-   [Unit]
-   Description=SIH26 ML Harmonization Microservice
-   After=network.target
-
-   [Service]
-   Type=simple
-   WorkingDirectory=%h/SIH
-   Environment=PYTHONPATH=%h/SIH/ML:%h/SIH
-   Environment=ML_PORT=8001
-   ExecStart=%h/SIH/.venv/bin/uvicorn ML.src.ml_service:app --host 0.0.0.0 --port 8001
-   Restart=always
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-3. **Backend Service (`~/.config/systemd/user/sih-backend.service`):**
-   ```ini
-   [Unit]
-   Description=SIH26 Backend API Gateway
-   After=network.target sih-ml.service
-
-   [Service]
-   Type=simple
-   WorkingDirectory=%h/SIH
-   Environment=PYTHONPATH=%h/SIH
-   ExecStart=%h/SIH/.venv/bin/uvicorn Backend.main:app --host 0.0.0.0 --port 8000
-   Restart=always
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-4. **Enable & Start:**
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now sih-ml.service sih-backend.service
-   ```
-
----
-
-## 8. Presentation & Live Demo Playbook
-
-### 8.1 5-Minute Pitch Narrative
-1. **The Hook (1 min):** Highlight that the 5 major CPSEs currently waste over ₹37,000 Crore across fragmented, redundant spare parts catalogs with zero cross-enterprise visibility.
-2. **The Platform (1.5 min):** Showcase the live **Dashboard**: 50,000 materials harmonized down to 1,517 CNMC codes with an aggregate 96.97% catalog reduction.
-3. **The AI Engine (1.5 min):** Open **AI Matching** and demonstrate live resolution of ambiguous industrial queries against the 1,517 golden catalog in 15ms.
-4. **Governance & Procurement (1 min):** Show **Duplicate Clusters** highlighting price variances across BHEL, CIL, CPCL, NTPC, and SAIL, and execute a live catalog approval audit action.
-
-### 8.2 Live Demo Showcase Examples
-
-#### Example 1: Bearing OEM vs Generic Standard Match
-- **Input Query:** `Deep Groove Ball Bearing 25x52x15 mm rubber seals`
-- **Output:** Matches OEM `SKF 6205-2RSH` under cluster `NMC-OG-BRG-0001`.
-- **Judges Talking Point:** "Our ISO dimension crosswalk identifies that standard 25x52x15mm bearings match expensive OEM part numbers, eliminating brand monopoly markups."
-
-#### Example 2: Gate Valve Pressure Class Conflict Defense
-- **Input Query:** `Gate Valve 50 NB Class 300# Flanged WNRF Carbon Steel`
-- **Candidate Pair:** `Gate Valve 2 inch 150# CS Flanged`
-- **Output:** **REJECTED** with attribute reason: `"Pressure Class Conflict: 300# != 150#"`.
-- **Judges Talking Point:** "AI cannot blindly cluster by name. Our Stage 4 hard attribute validator prevents catastrophic safety failures by rejecting pressure rating mismatches."
-
-#### Example 3: Power Cable Conductor Metallurgy Defense
-- **Input Query:** `1.1 kV XLPE 3.5C x 120 sqmm Aluminium Armoured Cable`
-- **Candidate Pair:** `1.1 kV XLPE 3.5C x 120 sqmm Copper Armoured Cable`
-- **Output:** **REJECTED** with attribute reason: `"Conductor Material Conflict: aluminium != copper"`.
-
----
-
-## 9. Verification & Health Check Commands
-
+### 7.3 Health Check & Verification
 ```bash
-# 1. Run Automated Test Suite
-PYTHONPATH=ML .venv/bin/pytest ML/tests/ -v --tb=short
+# Check running containers:
+podman ps
 
-# 2. Check Backend Gateway
-curl -s http://127.0.0.1:8000/ | grep -q "online" && echo "Backend: OK"
+# Verify Backend:
+curl -s http://127.0.0.1:8000/
 
-# 3. Check ML Microservice
-curl -s http://127.0.0.1:8001/health | grep -q "healthy" && echo "ML Engine: OK"
+# Verify ML Engine:
+curl -s http://127.0.0.1:8001/health
 
-# 4. Check Golden Clusters Index
-curl -s http://127.0.0.1:8001/health | grep -o '"loaded_golden_clusters":[0-9]*'
-
-# 5. Check Financial KPIs
-curl -s http://127.0.0.1:8000/api/analytics/kpis | grep -o '"duplicates_eliminated":[0-9]*'
+# Verify Ollama tags:
+curl -s http://127.0.0.1:11434/api/tags
 ```
