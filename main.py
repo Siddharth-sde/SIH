@@ -1,19 +1,21 @@
-import os
 import io
 import json
 import math
+import os
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Depends, Query, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, text
-import pandas as pd
 import httpx
+import pandas as pd
+from sqlalchemy import func, or_, text
+from sqlalchemy.orm import Session
 
-from database import engine, Base, get_db
+from database import Base, engine, get_db
 import models
 
 try:
@@ -23,99 +25,13 @@ except ImportError:
     PDF_SUPPORT = False
 
 # ============================================================
-# APP CONFIGURATION & DATABASE SETUP
+# APP CONFIGURATION & CONSTANTS
 # ============================================================
 
-Base.metadata.create_all(bind=engine)
-
-# Enable WAL mode for high-concurrency database operations
-with engine.connect() as conn:
-    conn.execute(text("PRAGMA journal_mode=WAL;"))
-    conn.commit()
-
-app = FastAPI(
-    title="National Unified Material Master Harmonization Platform",
-    description="Consolidated API Gateway serving Frontend, Database, and ML microservices.",
-    version="3.0.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8001")
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8001").rstrip("/")
 PROCUREMENT_SAVINGS_RATE = 0.10
 INVENTORY_REDUCTION_RATE = 0.15
-
-# ============================================================
-# UTILITIES: Security, Text Normalization & Data Quality
-# ============================================================
-
-def escape_like_string(text_val: str) -> str:
-    """Prevents LIKE wildcard exploitation in search queries."""
-    return text_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-def normalize_text(value: str) -> str:
-    if not value or pd.isna(value):
-        return ""
-    text_val = str(value).lower().replace("×", "x")
-    text_val = re.sub(r"[^a-z0-9\s./%-]", " ", text_val)
-    return " ".join(text_val.split())
-
-def calculate_quality_score(code, desc, uom, sector, price, stock, annual_qty) -> float:
-    score = sum([
-        bool(code),
-        bool(desc),
-        bool(uom),
-        bool(sector),
-        float(price or 0) > 0,
-        float(stock or 0) >= 0,
-        float(annual_qty or 0) >= 0
-    ])
-    return round((score / 7.0) * 100, 1)
-
-def token_similarity(text_a: str, text_b: str) -> float:
-    a = set(normalize_text(text_a).split())
-    b = set(normalize_text(text_b).split())
-    if not a or not b:
-        return 0.0
-    return round(len(a.intersection(b)) / len(a.union(b)), 4)
-
-def extract_tables_from_pdf(file_bytes: bytes) -> pd.DataFrame:
-    if not PDF_SUPPORT:
-        raise HTTPException(status_code=500, detail="pdfplumber library is not installed.")
-    
-    all_rows = []
-    headers = []
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                if not table or len(table) < 2:
-                    continue
-                if not headers:
-                    headers = [str(c).strip() if c else f"col_{i}" for i, c in enumerate(table[0])]
-                    data_rows = table[1:]
-                else:
-                    data_rows = table
-
-                for row in data_rows:
-                    cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
-                    if len(cleaned_row) < len(headers):
-                        cleaned_row.extend([""] * (len(headers) - len(cleaned_row)))
-                    all_rows.append(cleaned_row[:len(headers)])
-
-    if not headers or not all_rows:
-        return pd.DataFrame()
-    return pd.DataFrame(all_rows, columns=headers).dropna(how="all")
-
-# ============================================================
-# UNIVERSAL INGESTION ENGINE
-# ============================================================
+INGESTION_BATCH_SIZE = 5000
 
 ALIASES = {
     "material_code": ["source_material_code", "material_code", "legacy_material_code", "matnr", "item_code"],
@@ -129,9 +45,80 @@ ALIASES = {
     "cnmc_code": ["cnmc_code", "common_national_material_code", "true_cluster_id", "cluster_id"]
 }
 
-def parse_and_store_dataframe(df: pd.DataFrame, db: Session):
-    col_lookup = {str(col).strip().lower().replace(" ", "_"): col for col in df.columns}
-    
+# ============================================================
+# UTILITIES: Sanitization, Normalization & PDF Parsing
+# ============================================================
+
+def clean_null_bytes(val: Any) -> str:
+    """Removes null bytes and stringifies data to prevent driver failures."""
+    if val is None or pd.isna(val):
+        return ""
+    return str(val).replace("\x00", "").strip()
+
+def escape_like_string(text_val: str) -> str:
+    return text_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+def normalize_text(value: str) -> str:
+    cleaned = clean_null_bytes(value)
+    if not cleaned:
+        return ""
+    text_val = cleaned.lower().replace("×", "x")
+    text_val = re.sub(r"[^a-z0-9\s./%-]", " ", text_val)
+    return " ".join(text_val.split())
+
+def calculate_quality_score(raw_code: str, raw_desc: str, uom: str, sector: str, raw_price: Any, raw_stock: Any, raw_annual: Any) -> float:
+    score = sum([
+        bool(raw_code and not raw_code.startswith("ITEM-")),
+        bool(raw_desc and raw_desc != "UNNAMED ITEM"),
+        bool(uom),
+        bool(sector and sector != "General"),
+        pd.notna(raw_price) and float(raw_price or 0) > 0,
+        pd.notna(raw_stock),
+        pd.notna(raw_annual)
+    ])
+    return round((score / 7.0) * 100, 1)
+
+def token_similarity(text_a: str, text_b: str) -> float:
+    a = set(normalize_text(text_a).split())
+    b = set(normalize_text(text_b).split())
+    if not a or not b:
+        return 0.0
+    return round(len(a.intersection(b)) / len(a.union(b)), 4)
+
+def extract_tables_from_pdf(file_bytes: bytes) -> pd.DataFrame:
+    if not PDF_SUPPORT:
+        raise HTTPException(status_code=500, detail="pdfplumber library is not installed on this server.")
+
+    all_rows = []
+    headers = []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                if not headers:
+                    headers = [clean_null_bytes(c) if c else f"col_{i}" for i, c in enumerate(table[0])]
+                    data_rows = table[1:]
+                else:
+                    data_rows = table
+
+                for row in data_rows:
+                    cleaned_row = [clean_null_bytes(cell) for cell in row]
+                    if len(cleaned_row) < len(headers):
+                        cleaned_row.extend([""] * (len(headers) - len(cleaned_row)))
+                    all_rows.append(cleaned_row[:len(headers)])
+
+    if not headers or not all_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(all_rows, columns=headers).dropna(how="all")
+
+def parse_and_store_dataframe(df: pd.DataFrame, db: Session) -> int:
+    if df.empty:
+        return 0
+
+    col_lookup = {clean_null_bytes(col).lower().replace(" ", "_"): col for col in df.columns}
+
     def get_val(row, target_key, default=None):
         for alias in ALIASES.get(target_key, []):
             if alias in col_lookup:
@@ -140,86 +127,122 @@ def parse_and_store_dataframe(df: pd.DataFrame, db: Session):
                     return val
         return default
 
-    matched_orig_cols = set()
-    for key in ALIASES:
-        for alias in ALIASES[key]:
-            if alias in col_lookup:
-                matched_orig_cols.add(col_lookup[alias])
+    matched_orig_cols = {col_lookup[a] for k in ALIASES for a in ALIASES[k] if a in col_lookup}
+    unmatched_cols = [c for c in df.columns if c not in matched_orig_cols]
 
+    total_inserted = 0
     records = []
+
     for idx, row in df.iterrows():
-        raw_code = str(get_val(row, "material_code", f"ITEM-{idx+1}")).strip()
-        raw_desc = str(get_val(row, "description", "UNNAMED ITEM")).strip()
-        cpse = str(get_val(row, "cpse_name", "CPSE_GENERAL")).strip()
-        sector = str(get_val(row, "sector", "General")).strip()
-        uom = str(get_val(row, "uom", "NOS")).strip().upper()
-        
+        raw_code = clean_null_bytes(get_val(row, "material_code", f"ITEM-{idx+1}"))
+        raw_desc = clean_null_bytes(get_val(row, "description", "UNNAMED ITEM"))
+        cpse = clean_null_bytes(get_val(row, "cpse_name", "CPSE_GENERAL"))
+        sector = clean_null_bytes(get_val(row, "sector", "General"))
+        uom = clean_null_bytes(get_val(row, "uom", "NOS")).upper()
+
+        raw_price = get_val(row, "unit_price")
         try:
-            price = float(get_val(row, "unit_price", 0.0))
+            price = float(raw_price) if pd.notna(raw_price) else 0.0
         except (ValueError, TypeError):
             price = 0.0
 
+        raw_stock = get_val(row, "stock_qty")
         try:
-            stock = int(float(get_val(row, "stock_qty", 0)))
+            stock = int(float(raw_stock)) if pd.notna(raw_stock) else 0
         except (ValueError, TypeError):
             stock = 0
 
+        raw_annual = get_val(row, "annual_qty")
         try:
-            annual = int(float(get_val(row, "annual_qty", 0)))
+            annual = int(float(raw_annual)) if pd.notna(raw_annual) else 0
         except (ValueError, TypeError):
             annual = 0
 
         raw_cnmc = get_val(row, "cnmc_code")
-        cnmc = f"NMC-{str(raw_cnmc).replace('CLUSTER_', '').strip()}" if raw_cnmc else "PENDING_HARMONIZATION"
+        cnmc = f"NMC-{clean_null_bytes(raw_cnmc).replace('CLUSTER_', '')}" if raw_cnmc else "PENDING_HARMONIZATION"
 
         extra = {}
-        for c in df.columns:
-            if c not in matched_orig_cols and pd.notna(row[c]):
-                extra[str(c)] = str(row[c])
+        for c in unmatched_cols:
+            val = row[c]
+            if pd.notna(val):
+                extra[str(c)] = clean_null_bytes(val)
 
-        q_score = calculate_quality_score(raw_code, raw_desc, uom, sector, price, stock, annual)
+        extra["data_quality_score"] = calculate_quality_score(raw_code, raw_desc, uom, sector, raw_price, raw_stock, raw_annual)
 
-        records.append(models.MaterialMaster(
-            material_code=raw_code,
-            description=raw_desc,
-            cpse_name=cpse,
-            sector=sector,
-            uom=uom,
-            unit_price=price,
-            stock_qty=stock,
-            annual_qty=annual,
-            cnmc_code=cnmc,
-            standardized_description=raw_desc.upper(),
-            status="PENDING_REVIEW" if extra.get("human_review_flag") == "True" else "ACTIVE",
-            extra_data=json.dumps({**extra, "data_quality_score": q_score})
-        ))
+        records.append({
+            "material_code": raw_code,
+            "description": raw_desc,
+            "cpse_name": cpse,
+            "sector": sector,
+            "uom": uom,
+            "unit_price": max(0.0, price),
+            "stock_qty": max(0, stock),
+            "annual_qty": max(0, annual),
+            "cnmc_code": cnmc,
+            "standardized_description": raw_desc.upper(),
+            "status": "PENDING_REVIEW" if str(extra.get("human_review_flag", "")).lower() == "true" else "ACTIVE",
+            "extra_data": json.dumps(extra, default=str)
+        })
 
-    db.bulk_save_objects(records)
-    db.commit()
-    return len(records)
+        if len(records) >= INGESTION_BATCH_SIZE:
+            db.bulk_insert_mappings(models.MaterialMaster, records)
+            db.commit()
+            db.expunge_all()
+            total_inserted += len(records)
+            records = []
 
-# ============================================================
-# STARTUP: Auto-Load Benchmark Datasets
-# ============================================================
+    if records:
+        db.bulk_insert_mappings(models.MaterialMaster, records)
+        db.commit()
+        db.expunge_all()
+        total_inserted += len(records)
 
-@app.on_event("startup")
-def startup_event():
-    db = next(get_db())
-    try:
-        count = db.query(models.MaterialMaster).count()
-        candidate_files = ["material_master_input.csv", "material_master_input_50000(1).csv"]
-        target_file = next((f for f in candidate_files if os.path.exists(f)), None)
-        
-        if count == 0 and target_file:
-            print(f" Initializing database from {target_file}...")
-            df = pd.read_csv(target_file, low_memory=False)
-            parse_and_store_dataframe(df, db)
-            print(" Database auto-seed complete.")
-    finally:
-        db.close()
+    return total_inserted
 
 # ============================================================
-# API ENDPOINTS
+# LIFESPAN & APPLICATION LIFECYCLE
+# ============================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL;"))
+        conn.execute(text("PRAGMA synchronous=NORMAL;"))
+        conn.commit()
+
+    def sync_startup():
+        db = next(get_db())
+        try:
+            count = db.query(models.MaterialMaster).count()
+            candidate_files = ["material_master_input.csv", "material_master_input_50000(1).csv"]
+            target_file = next((f for f in candidate_files if os.path.exists(f)), None)
+            if count == 0 and target_file:
+                df = pd.read_csv(target_file, dtype=str, low_memory=False)
+                parse_and_store_dataframe(df, db)
+        finally:
+            db.close()
+
+    await run_in_threadpool(sync_startup)
+    yield
+
+app = FastAPI(
+    title="National Unified Material Master Harmonization Platform",
+    description="Consolidated API Gateway serving Frontend, Database, and ML microservices.",
+    version="3.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================
+# CORE API ENDPOINTS
 # ============================================================
 
 @app.get("/")
@@ -227,11 +250,9 @@ def home():
     return {
         "service": "National Unified Material Master Platform",
         "status": "online",
-        "port": 8000,
         "docs": "/docs"
     }
 
-# 1. CATALOG SEARCH, FILTER & PAGINATION
 @app.get("/api/materials")
 def get_materials(
     q: Optional[str] = Query(None, description="Search description, code, or CPSE"),
@@ -243,7 +264,7 @@ def get_materials(
 ):
     query = db.query(models.MaterialMaster)
     if q:
-        safe_q = escape_like_string(q)
+        safe_q = escape_like_string(q.strip())
         query = query.filter(
             or_(
                 models.MaterialMaster.description.ilike(f"%{safe_q}%"),
@@ -287,7 +308,6 @@ def get_materials(
         "results": results
     }
 
-# 2. PAIRWISE MATCH EVALUATION (Live side-by-side comparison)
 @app.get("/api/match")
 def match_materials(material_id: int, compare_id: int, db: Session = Depends(get_db)):
     first = db.query(models.MaterialMaster).filter(models.MaterialMaster.id == material_id).first()
@@ -313,25 +333,29 @@ def match_materials(material_id: int, compare_id: int, db: Session = Depends(get
         "decision": decision
     }
 
-# 3. EXECUTIVE PITCH KPIS
 @app.get("/api/analytics/kpis")
 def get_kpis(db: Session = Depends(get_db)):
-    materials = db.query(models.MaterialMaster).all()
-    total_materials = len(materials)
+    stats = db.query(
+        func.count(models.MaterialMaster.id).label("total"),
+        func.count(func.distinct(models.MaterialMaster.cnmc_code)).label("unique_cnmcs"),
+        func.coalesce(func.sum(models.MaterialMaster.unit_price * models.MaterialMaster.stock_qty), 0.0).label("stock_val"),
+        func.coalesce(func.sum(models.MaterialMaster.unit_price * models.MaterialMaster.annual_qty), 0.0).label("spend_val")
+    ).first()
+
+    total_materials = stats.total or 0
     if total_materials == 0:
         return {"error": "No materials loaded in database"}
 
-    unique_cnmcs = db.query(func.count(func.distinct(models.MaterialMaster.cnmc_code))).scalar() or 1
+    unique_cnmcs = stats.unique_cnmcs or 0
     duplicates_detected = max(0, total_materials - unique_cnmcs)
-
-    total_stock_value = sum(m.unit_price * m.stock_qty for m in materials)
-    total_procurement_spend = sum(m.unit_price * m.annual_qty for m in materials)
+    total_stock_value = float(stats.stock_val)
+    total_procurement_spend = float(stats.spend_val)
 
     return {
         "total_materials": total_materials,
         "unique_national_codes": unique_cnmcs,
         "duplicate_materials": duplicates_detected,
-        "duplicate_percentage": round((duplicates_detected / total_materials) * 100, 2),
+        "duplicate_percentage": round((duplicates_detected / total_materials) * 100, 2) if total_materials > 0 else 0.0,
         "inventory_value_inr": round(total_stock_value, 2),
         "annual_procurement_value_inr": round(total_procurement_spend, 2),
         "potential_procurement_savings_inr": round(total_procurement_spend * PROCUREMENT_SAVINGS_RATE, 2),
@@ -340,59 +364,86 @@ def get_kpis(db: Session = Depends(get_db)):
         "inventory_reduction_rate": f"{int(INVENTORY_REDUCTION_RATE * 100)}%"
     }
 
-# 4. RANKED SAVINGS OPPORTUNITIES (Cluster analysis sorted by spend)
 @app.get("/api/analytics/opportunities")
 def get_ranked_opportunities(limit: int = 15, db: Session = Depends(get_db)):
-    duplicate_codes = (
-        db.query(models.MaterialMaster.cnmc_code)
-        .filter(models.MaterialMaster.cnmc_code != "PENDING_HARMONIZATION")
-        .group_by(models.MaterialMaster.cnmc_code)
-        .having(func.count(models.MaterialMaster.id) > 1)
-        .all()
-    )
-    duplicate_codes = [r[0] for r in duplicate_codes]
-
-    opportunities = []
-    for code in duplicate_codes:
-        cluster_items = db.query(models.MaterialMaster).filter(models.MaterialMaster.cnmc_code == code).all()
-        inv_val = sum(m.unit_price * m.stock_qty for m in cluster_items)
-        proc_val = sum(m.unit_price * m.annual_qty for m in cluster_items)
-
-        opportunities.append({
-            "cnmc_code": code,
-            "canonical_name": cluster_items[0].standardized_description or cluster_items[0].description,
-            "material_count": len(cluster_items),
-            "cpses_involved": list(set(m.cpse_name for m in cluster_items)),
-            "inventory_value_inr": round(inv_val, 2),
-            "procurement_value_inr": round(proc_val, 2),
-            "potential_savings_inr": round(proc_val * PROCUREMENT_SAVINGS_RATE, 2),
-            "working_capital_freed_inr": round(inv_val * INVENTORY_REDUCTION_RATE, 2)
-        })
-
-    opportunities.sort(key=lambda x: x["inventory_value_inr"], reverse=True)
-    return {"count": len(opportunities), "opportunities": opportunities[:limit]}
-
-# 5. DUPLICATE CLUSTERS (Grouped by CNMC code)
-@app.get("/api/duplicates/clusters")
-def get_duplicate_clusters(limit: int = 25, db: Session = Depends(get_db)):
     subquery = (
-        db.query(models.MaterialMaster.cnmc_code)
+        db.query(
+            models.MaterialMaster.cnmc_code,
+            func.min(models.MaterialMaster.standardized_description).label("canonical_name"),
+            func.count(models.MaterialMaster.id).label("material_count"),
+            func.sum(models.MaterialMaster.unit_price * models.MaterialMaster.stock_qty).label("inv_val"),
+            func.sum(models.MaterialMaster.unit_price * models.MaterialMaster.annual_qty).label("proc_val")
+        )
         .filter(models.MaterialMaster.cnmc_code != "PENDING_HARMONIZATION")
         .group_by(models.MaterialMaster.cnmc_code)
         .having(func.count(models.MaterialMaster.id) > 1)
+        .order_by(text("inv_val DESC"))
         .limit(limit)
         .all()
     )
-    duplicate_codes = [r[0] for r in subquery]
+
+    top_cnmcs = [row.cnmc_code for row in subquery]
+    cpse_map = {}
+    if top_cnmcs:
+        cpse_records = (
+            db.query(models.MaterialMaster.cnmc_code, models.MaterialMaster.cpse_name)
+            .filter(models.MaterialMaster.cnmc_code.in_(top_cnmcs))
+            .distinct()
+            .all()
+        )
+        for cnmc, cpse in cpse_records:
+            cpse_map.setdefault(cnmc, []).append(cpse)
+
+    opportunities = []
+    for r in subquery:
+        inv = float(r.inv_val or 0.0)
+        proc = float(r.proc_val or 0.0)
+        opportunities.append({
+            "cnmc_code": r.cnmc_code,
+            "canonical_name": r.canonical_name,
+            "material_count": r.material_count,
+            "cpses_involved": cpse_map.get(r.cnmc_code, []),
+            "inventory_value_inr": round(inv, 2),
+            "procurement_value_inr": round(proc, 2),
+            "potential_savings_inr": round(proc * PROCUREMENT_SAVINGS_RATE, 2),
+            "working_capital_freed_inr": round(inv * INVENTORY_REDUCTION_RATE, 2)
+        })
+
+    return {"count": len(opportunities), "opportunities": opportunities}
+
+@app.get("/api/duplicates/clusters")
+def get_duplicate_clusters(limit: int = 25, db: Session = Depends(get_db)):
+    duplicate_codes = [
+        r[0] for r in (
+            db.query(models.MaterialMaster.cnmc_code)
+            .filter(models.MaterialMaster.cnmc_code != "PENDING_HARMONIZATION")
+            .group_by(models.MaterialMaster.cnmc_code)
+            .having(func.count(models.MaterialMaster.id) > 1)
+            .limit(limit)
+            .all()
+        )
+    ]
+
+    if not duplicate_codes:
+        return {"count": 0, "clusters": []}
+
+    members = (
+        db.query(models.MaterialMaster)
+        .filter(models.MaterialMaster.cnmc_code.in_(duplicate_codes))
+        .all()
+    )
+
+    cluster_buckets: Dict[str, List[models.MaterialMaster]] = {}
+    for m in members:
+        cluster_buckets.setdefault(m.cnmc_code, []).append(m)
 
     clusters = []
-    for code in duplicate_codes:
-        members = db.query(models.MaterialMaster).filter(models.MaterialMaster.cnmc_code == code).all()
+    for code, m_list in cluster_buckets.items():
         clusters.append({
             "cnmc": code,
-            "canonical_name": members[0].standardized_description or members[0].description,
-            "material_count": len(members),
-            "cpses_involved": list(set(m.cpse_name for m in members)),
+            "canonical_name": m_list[0].standardized_description or m_list[0].description,
+            "material_count": len(m_list),
+            "cpses_involved": sorted(list({m.cpse_name for m in m_list})),
             "materials": [
                 {
                     "id": m.id,
@@ -403,12 +454,12 @@ def get_duplicate_clusters(limit: int = 25, db: Session = Depends(get_db)):
                     "unit_price": m.unit_price,
                     "stock_qty": m.stock_qty
                 }
-                for m in members
+                for m in m_list
             ]
         })
+
     return {"count": len(clusters), "clusters": clusters}
 
-# 6. HUMAN-IN-THE-LOOP APPROVAL & AUDIT LOG
 @app.post("/api/materials/{material_id}/action")
 def update_material_status(
     material_id: int,
@@ -419,7 +470,7 @@ def update_material_status(
 ):
     mat = db.query(models.MaterialMaster).filter(models.MaterialMaster.id == material_id).first()
     if not mat:
-        raise HTTPException(status_code=404, detail="Material not found")
+        raise HTTPException(status_code=404, detail="Material record not found")
 
     mat.status = "APPROVED" if action == "APPROVE" else "REJECTED"
     log = models.AuditLog(
@@ -438,108 +489,170 @@ def get_audit_trail(limit: int = 50, db: Session = Depends(get_db)):
     logs = db.query(models.AuditLog).order_by(models.AuditLog.id.desc()).limit(limit).all()
     return {"count": len(logs), "logs": logs}
 
-# 7. SECURE LOCAL FILE INGESTION
 @app.post("/api/load-local-file")
 def load_local(file_name: str = Query(...), db: Session = Depends(get_db)):
     base_dir = Path(".").resolve()
     target_path = (base_dir / file_name).resolve()
 
-    if not str(target_path).startswith(str(base_dir)) or not target_path.exists():
-        raise HTTPException(status_code=400, detail="Invalid file path or access denied.")
+    if not target_path.is_relative_to(base_dir) or not target_path.is_file():
+        raise HTTPException(status_code=400, detail="Invalid file path or access outside application boundary.")
 
-    df = pd.read_csv(target_path) if target_path.suffix == ".csv" else pd.read_excel(target_path)
+    try:
+        df = pd.read_csv(target_path, dtype=str, low_memory=False) if target_path.suffix.lower() == ".csv" else pd.read_excel(target_path, dtype=str)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read local file: {str(e)}")
+
     count = parse_and_store_dataframe(df, db)
-    return {"message": f"Loaded {count} records safely from {file_name}"}
+    return {"message": f"Successfully ingested {count} records from {file_name}"}
 
-# 8. MULTI-FORMAT UPLOAD (CSV, XLSX, PDF)
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    contents = await file.read()
-    filename = file.filename.lower()
+def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    contents = file.file.read()
+    filename = (file.filename or "").lower()
 
-    if filename.endswith(".csv"):
-        df = pd.read_csv(io.StringIO(contents.decode("utf-8", errors="ignore")))
-    elif filename.endswith((".xlsx", ".xls")):
-        df = pd.read_excel(io.BytesIO(contents))
-    elif filename.endswith(".pdf"):
-        df = extract_tables_from_pdf(contents)
-        if df.empty:
-            raise HTTPException(status_code=422, detail="No structured tables found in PDF.")
-    else:
-        raise HTTPException(status_code=400, detail="Supported formats: CSV, XLSX, XLS, PDF.")
+    try:
+        if filename.endswith(".csv"):
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8", errors="ignore")), dtype=str, low_memory=False)
+        elif filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+        elif filename.endswith(".pdf"):
+            df = extract_tables_from_pdf(contents)
+            if df.empty:
+                raise HTTPException(status_code=422, detail="No structured tables found in the uploaded PDF.")
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported format. Permitted: CSV, XLSX, XLS, PDF.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"File parsing error: {str(e)}")
 
     count = parse_and_store_dataframe(df, db)
     return {"message": f"Successfully ingested {count} records from '{file.filename}'.", "total_ingested": count}
 
-# 9. ML SERVICE BRIDGES (With Fallbacks if ML Service is not running)
 @app.post("/api/ml/match-single")
 async def proxy_single_match(payload: dict, db: Session = Depends(get_db)):
     query_text = f"{payload.get('query_description', '')} {payload.get('query_spec_text', '')}".strip()
-    
-    # Try calling port 8001 if available
+    top_k = int(payload.get("top_k", 5))
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{ML_SERVICE_URL}/api/ml/match-single",
-                json={"query_text": query_text, "top_k": payload.get("top_k", 5)}
+                json={"query_text": query_text, "top_k": top_k}
             )
             if resp.status_code == 200:
                 return resp.json()
     except Exception:
-        pass  # Fallback to local database matching below
+        pass
 
-    # Graceful Fallback: Match against existing database records
+    # Thread-safe read operations on current worker thread
     items = db.query(models.MaterialMaster).limit(500).all()
-    scored = []
-    for item in items:
-        sim = token_similarity(query_text, item.description)
-        if sim > 0.3:
-            scored.append({
-                "source_material_code": item.material_code,
-                "material_description": item.description,
-                "assigned_cnmc": item.cnmc_code,
-                "similarity_score": sim
-            })
-    scored.sort(key=lambda x: x["similarity_score"], reverse=True)
+
+    def run_scoring():
+        scored = []
+        for item in items:
+            sim = token_similarity(query_text, item.description)
+            if sim > 0.3:
+                scored.append({
+                    "source_material_code": item.material_code,
+                    "material_description": item.description,
+                    "assigned_cnmc": item.cnmc_code,
+                    "similarity_score": sim
+                })
+        scored.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return scored[:top_k]
+
+    scored_items = await run_in_threadpool(run_scoring)
     return {
         "status": "local_fallback_match",
-        "matches": scored[:payload.get("top_k", 5)]
+        "matches": scored_items
     }
 
 @app.post("/api/upload-and-harmonize")
 async def upload_and_harmonize(file: UploadFile = File(...), db: Session = Depends(get_db)):
     contents = await file.read()
-    
-    # Forward file to ML service port 8001
+    filename = file.filename or "upload.csv"
+    content_type = file.content_type or "application/octet-stream"
+
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(
                 f"{ML_SERVICE_URL}/api/ml/harmonize-batch",
-                files={"file": (file.filename, contents, file.content_type)}
+                files={"file": (filename, contents, content_type)}
             )
+            response.raise_for_status()
             ml_results = response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"ML Service rejected input: {e.response.text}")
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unavailable on port 8001: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"ML Service unreachable at {ML_SERVICE_URL}: {str(e)}")
 
     crosswalk = ml_results.get("crosswalk", [])
     records = []
+    total_inserted = 0
+
     for item in crosswalk:
+        raw_code = clean_null_bytes(item.get("source_material_code", ""))
+        raw_desc = clean_null_bytes(item.get("material_description", ""))
+        cpse = clean_null_bytes(item.get("cpse_id", "GEN_CPSE"))
+        sector = clean_null_bytes(item.get("sector", "General"))
+        uom = clean_null_bytes(item.get("uom", "NOS")).upper()
+
+        try:
+            price = float(item.get("unit_price", 0.0) or 0.0)
+        except (ValueError, TypeError):
+            price = 0.0
+
+        try:
+            stock = int(float(item.get("stock_qty", 0) or 0))
+        except (ValueError, TypeError):
+            stock = 0
+
+        try:
+            annual = int(float(item.get("annual_qty", 0) or 0))
+        except (ValueError, TypeError):
+            annual = 0
+
         extra_info = {
             "match_type": item.get("match_type"),
             "confidence": item.get("match_confidence"),
             "category_name": item.get("category_name"),
-            "issue_flag": item.get("issue_flag")
+            "issue_flag": item.get("issue_flag"),
+            "data_quality_score": calculate_quality_score(raw_code, raw_desc, uom, sector, price, stock, annual)
         }
-        records.append(models.MaterialMaster(
-            material_code=item.get("source_material_code", ""),
-            description=item.get("material_description", ""),
-            cpse_name=item.get("cpse_id", "GEN_CPSE"),
-            cnmc_code=item.get("assigned_cnmc", "PENDING"),
-            standardized_description=item.get("canonical_description", ""),
-            status=item.get("status", "PENDING_REVIEW"),
-            extra_data=json.dumps(extra_info)
-        ))
-    db.bulk_save_objects(records)
-    db.commit()
 
-    return {"message": f"Harmonized {len(records)} items via ML engine.", "kpis": ml_results.get("kpis")}
+        canonical = clean_null_bytes(item.get("canonical_description") or raw_desc).upper()
+        cnmc = clean_null_bytes(item.get("assigned_cnmc", "PENDING_HARMONIZATION"))
+
+        records.append({
+            "material_code": raw_code,
+            "description": raw_desc,
+            "cpse_name": cpse,
+            "sector": sector,
+            "uom": uom,
+            "unit_price": max(0.0, price),
+            "stock_qty": max(0, stock),
+            "annual_qty": max(0, annual),
+            "cnmc_code": cnmc,
+            "standardized_description": canonical,
+            "status": "APPROVED" if item.get("match_type") == "EXACT" else "PENDING_REVIEW",
+            "extra_data": json.dumps(extra_info, default=str)
+        })
+
+        if len(records) >= INGESTION_BATCH_SIZE:
+            db.bulk_insert_mappings(models.MaterialMaster, records)
+            db.commit()
+            db.expunge_all()
+            total_inserted += len(records)
+            records = []
+
+    if records:
+        db.bulk_insert_mappings(models.MaterialMaster, records)
+        db.commit()
+        db.expunge_all()
+        total_inserted += len(records)
+
+    return {
+        "message": f"Harmonized and saved {total_inserted} items via ML engine.",
+        "kpis": ml_results.get("kpis", {})
+    }
