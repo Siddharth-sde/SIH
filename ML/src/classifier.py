@@ -5,10 +5,17 @@ National Unified Material Master Platform - ML Engine.
 
 import json
 import logging
+import time
 from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
-from sentence_transformers import SentenceTransformer
-import requests
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+try:
+    import requests
+except ImportError:
+    requests = None
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +259,9 @@ class DualLayerClassifier:
         self.category_ids: List[str] = list(TAXONOMY.keys())
         self.anchor_to_category: List[str] = []
 
+        self._llm_consecutive_failures: int = 0
+        self._llm_circuit_breaker_open_until: float = 0.0
+
         if not lazy_init:
             self._ensure_initialized()
 
@@ -391,7 +401,12 @@ class DualLayerClassifier:
     ) -> Optional[Dict[str, Any]]:
         """
         Invokes Qwen2.5-3B via Ollama to adjudicate borderline categories among top-3 candidates.
+        Includes circuit breaker to fail fast if Ollama service is unreachable.
         """
+        now = time.time()
+        if now < self._llm_circuit_breaker_open_until:
+            return None
+
         top3 = top_candidates[:3]
         candidate_options = [f"{i+1}. {c[0]} ({TAXONOMY[c[0]]['name']})" for i, c in enumerate(top3)]
         options_text = "\n".join(candidate_options)
@@ -413,9 +428,10 @@ class DualLayerClassifier:
                     "messages": [{"role": "user", "content": prompt}],
                     "format": "json",
                     "stream": False,
-                    "options": {"temperature": 0.0}
+                    "options": {"temperature": 0.0},
+                    "keep_alive": -1
                 },
-                timeout=5.0
+                timeout=3.0
             )
             if resp.status_code == 200:
                 body = resp.json()
@@ -423,6 +439,7 @@ class DualLayerClassifier:
                 parsed = json.loads(content)
                 cat_id = parsed.get("category_id")
                 if cat_id in TAXONOMY:
+                    self._llm_consecutive_failures = 0
                     return {
                         "category_id": cat_id,
                         "category_name": TAXONOMY[cat_id]["name"],
@@ -430,8 +447,14 @@ class DualLayerClassifier:
                         "method": "llm_adjudicated",
                         "reasoning": f"LLM verified: {parsed.get('reasoning', '')}",
                     }
+            self._llm_consecutive_failures += 1
         except Exception as e:
-            logger.debug(f"Ollama adjudication skipped: {e}")
+            self._llm_consecutive_failures += 1
+            if self._llm_consecutive_failures >= 3:
+                self._llm_circuit_breaker_open_until = time.time() + 30.0
+                logger.warning(f"Ollama circuit breaker opened (3 failures). Pausing LLM calls for 30s. Last error: {e}")
+            else:
+                logger.debug(f"Ollama adjudication skipped: {e}")
 
         return None
 
@@ -518,6 +541,7 @@ class DualLayerClassifier:
         cleaned_spec_texts: List[str],
         specs_list: List[Dict[str, Any]],
         batch_size: int = 256,
+        use_llm: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         High-throughput vectorized batch classification across thousands of items.
@@ -528,7 +552,7 @@ class DualLayerClassifier:
             f"{d} {s}".strip() for d, s in zip(cleaned_descriptions, cleaned_spec_texts)
         ]
 
-        logger.info(f"Batch encoding {n} items with batch_size={batch_size}...")
+        logger.info(f"Batch encoding {n} items with batch_size={batch_size} (use_llm={use_llm})...")
         embeddings = self.encode_batch(combined_texts, batch_size=batch_size)
 
         logger.info(f"Computing anchor similarity matrix for {n} items...")
@@ -581,14 +605,29 @@ class DualLayerClassifier:
 
             if top_score >= 0.70 and (top_score - second_score >= 0.08):
                 reasoning = f"Closest exemplar anchor match with cosine similarity {top_score:.3f} (margin: +{top_score-second_score:.3f})"
+                method = "embedding_nearest_anchor"
+                confidence = round(float(top_score), 3)
+            elif use_llm:
+                # LLM adjudication for borderline cases
+                llm_result = self.query_llm_adjudication(text, specs, ranked_cats)
+                if llm_result:
+                    llm_result["top_candidates"] = [(c, round(s, 3)) for c, s in ranked_cats[:3]]
+                    llm_result["embedding"] = emb
+                    results.append(llm_result)
+                    continue
+                reasoning = f"Nearest embedding exemplar ({top_score:.3f} similarity to {TAXONOMY[top_cat_id]['name']})"
+                method = "embedding_nearest_anchor"
+                confidence = round(float(top_score), 3)
             else:
                 reasoning = f"Nearest embedding exemplar ({top_score:.3f} similarity to {TAXONOMY[top_cat_id]['name']})"
+                method = "embedding_nearest_anchor"
+                confidence = round(float(top_score), 3)
 
             results.append({
                 "category_id": top_cat_id,
                 "category_name": TAXONOMY[top_cat_id]["name"],
-                "confidence": round(float(top_score), 3),
-                "method": "embedding_nearest_anchor",
+                "confidence": confidence,
+                "method": method,
                 "reasoning": reasoning,
                 "top_candidates": [(c, round(s, 3)) for c, s in ranked_cats[:3]],
                 "embedding": emb,

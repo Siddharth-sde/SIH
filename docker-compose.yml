@@ -1,0 +1,82 @@
+services:
+  # Container 1: Ollama LLM Engine (GPU Passthrough)
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: sih_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-storage:/root/.ollama
+    devices:
+      - "nvidia.com/gpu=all"
+    security_opt:
+      - "label=disable"
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
+    healthcheck:
+      test: "ollama list || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Container 2: ML Harmonization Microservice
+  ml-service:
+    build:
+      context: ./ML
+      dockerfile: Dockerfile.ml
+    container_name: sih_ml_service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - LLM_MODEL=qwen2.5:3b
+      - USE_LLM=true
+      - SAVINGS_PERCENTAGE=0.08
+      - HF_HUB_OFFLINE=1
+      - EMBEDDING_MODEL_PATH=/app/models/all-MiniLM-L6-v2
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    healthcheck:
+      test: "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      - ollama
+
+  # Container 3: Unified App Host (Backend Gateway + Frontend Web Server)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: sih_app_host
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "5173:5173"
+    environment:
+      - ML_SERVICE_URL=http://ml-service:8001
+      - DATABASE_URL=sqlite:////app/data/material_master.db
+      - PYTHONUNBUFFERED=1
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    volumes:
+      - sih-data:/app/data
+    healthcheck:
+      test: "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")' || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      ml-service:
+        condition: service_healthy
+
+volumes:
+  ollama-storage:
+    external: true
+  sih-data:

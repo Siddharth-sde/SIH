@@ -139,25 +139,30 @@ def test_preprocessor_on_entire_400_dataset():
     assert "gate valve" in processed_df.loc[processed_df["source_material_code"] == "CP-10040", "cleaned_description"].values[0]
 
 
-class TestPreprocessor(unittest.TestCase):
-    def test_uom_canonicalization(self):
-        test_uom_canonicalization()
+def test_empty_and_null_edge_cases():
+    harmonizer = UOMHarmonizer()
+    assert harmonizer.canonicalize("")[0] == "NOS"
+    assert harmonizer.canonicalize("UNKNOWN_UOM_XYZ")[0] == "UNKNOWNUOMXYZ"
 
-    def test_uom_compatibility_and_conflict(self):
-        test_uom_compatibility_and_conflict()
+    expander = AcronymExpander()
+    assert expander.expand("") == ""
+    assert expander.expand(None) == ""
 
-    def test_acronym_expansion(self):
-        test_acronym_expansion()
+    norm = PipeDimensionNormalizer()
+    assert norm.normalize_dimensions("") == ""
 
-    def test_dimension_normalization(self):
-        test_dimension_normalization()
-
-    def test_full_preprocessor_on_samples(self):
-        test_full_preprocessor_on_samples()
-
-    def test_preprocessor_on_entire_400_dataset(self):
-        test_preprocessor_on_entire_400_dataset()
+    prep = Stage1Preprocessor()
+    res = prep.process_record({"material_description": ""})
+    assert res["cleaned_description"] == ""
+    assert res["canonical_uom"] == "NOS"
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.TestSuite()
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            suite.addTest(unittest.FunctionTestCase(obj))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        exit(1)

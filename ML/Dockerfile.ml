@@ -11,19 +11,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
-# Copy offline model weights if present in build context (resilient build)
-RUN mkdir -p /app/models
-COPY README.md models* /app/models/
-RUN rm -f /app/models/README.md
+# Pre-download and save SentenceTransformer model weights for complete offline support
+RUN mkdir -p /app/models && \
+    python -c "from sentence_transformers import SentenceTransformer; model = SentenceTransformer('all-MiniLM-L6-v2'); model.save('/app/models/all-MiniLM-L6-v2')"
 
-# Copy source code and pre-processed golden outputs
+# Copy source code, test suite, and pre-processed golden outputs
 COPY src/ /app/src/
 COPY data/ /app/data/
+COPY tests/ /app/tests/
+COPY material_master_input.csv ground_truth_clusters.csv /app/
 
 ENV PYTHONPATH=/app
 ENV HF_HUB_OFFLINE=1
+ENV EMBEDDING_MODEL_PATH=/app/models/all-MiniLM-L6-v2
+
+# Create non-root application user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8001
 

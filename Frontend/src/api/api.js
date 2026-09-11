@@ -1,5 +1,6 @@
-﻿const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-const ML_URL = import.meta.env.VITE_ML_URL || 'http://localhost:8001';
+const defaultHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+const isProxied = typeof window !== 'undefined' && window.location.port === '5173';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (isProxied ? '' : `http://${defaultHost}:8000`);
 
 // ── Backend APIs ──────────────────────────────────────────────────────────────
 
@@ -14,7 +15,9 @@ export const getMaterials = (params = {}) => {
 };
 
 export const getClusters = (limit = 25) =>
-  fetch(`${BACKEND_URL}/api/duplicates/clusters?limit=${limit}`).then(r => r.json());
+  fetch(`${BACKEND_URL}/api/duplicates/clusters?limit=${limit}`)
+    .then(r => r.json())
+    .then(d => (Array.isArray(d) ? d : (d.clusters || [])));
 
 export const uploadFile = (file) => {
   const fd = new FormData();
@@ -22,19 +25,32 @@ export const uploadFile = (file) => {
   return fetch(`${BACKEND_URL}/api/upload`, { method: 'POST', body: fd }).then(r => r.json());
 };
 
+export const uploadAndHarmonize = (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd })
+    .then(r => {
+      if (!r.ok) return r.json().then(err => Promise.reject(new Error(err.detail || 'Harmonization failed')));
+      return r.json();
+    });
+};
+
 export const updateMaterialStatus = (id, action) =>
   fetch(`${BACKEND_URL}/api/materials/${id}/action?action=${action}`, { method: 'POST' }).then(r => r.json());
 
-// ── ML Service APIs ───────────────────────────────────────────────────────────
+export const getAuditLogs = (limit = 50) =>
+  fetch(`${BACKEND_URL}/api/audit?limit=${limit}`).then(r => r.json());
+
+// ── ML Service APIs (Routed through Backend Gateway) ──────────────────────────
 
 export const getMLHealth = () =>
-  fetch(`${ML_URL}/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
+  fetch(`${BACKEND_URL}/api/ml/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
 
 export const getMLKPIs = () =>
-  fetch(`${ML_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);
+  fetch(`${BACKEND_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);
 
 export const matchSingle = (payload) =>
-  fetch(`${ML_URL}/api/ml/match-single`, {
+  fetch(`${BACKEND_URL}/api/ml/match-single`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -43,5 +59,15 @@ export const matchSingle = (payload) =>
 export const harmonizeBatch = (file) => {
   const fd = new FormData();
   fd.append('file', file);
-  return fetch(`${ML_URL}/api/ml/harmonize-batch`, { method: 'POST', body: fd }).then(r => r.json());
+  return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd }).then(r => r.json());
 };
+
+export const getMaterialsMeta = () =>
+  fetch(`${BACKEND_URL}/api/materials/meta`)
+    .then(r => r.json())
+    .catch(() => ({ sectors: [], cpses: [], statuses: [], total: 0 }));
+
+export const getMLEvaluation = () =>
+  fetch(`${BACKEND_URL}/api/ml/evaluation`)
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);

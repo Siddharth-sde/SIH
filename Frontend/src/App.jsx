@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ToastProvider } from './components/Toast';
 import Dashboard from './pages/Dashboard';
@@ -7,10 +7,10 @@ import Materials from './pages/Materials';
 import Clusters from './pages/Clusters';
 import AIMatch from './pages/AIMatch';
 import Analytics from './pages/Analytics';
+import AuditLog from './pages/AuditLog';
 import './index.css';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-const ML_URL = import.meta.env.VITE_ML_URL || 'http://localhost:8001';
 
 function App() {
   const [page, setPage] = useState('dashboard');
@@ -24,7 +24,7 @@ function App() {
         setBackendOnline(true);
       } catch { setBackendOnline(false); }
       try {
-        const r = await fetch(`${ML_URL}/health`);
+        const r = await fetch(`${BACKEND_URL}/api/ml/health`);
         const j = await r.json();
         setMlOnline(j.status === 'healthy');
       } catch { setMlOnline(false); }
@@ -34,7 +34,7 @@ function App() {
     return () => clearInterval(t);
   }, []);
 
-  const pages = { dashboard: Dashboard, upload: Upload, materials: Materials, clusters: Clusters, 'ai-match': AIMatch, analytics: Analytics };
+  const pages = { dashboard: Dashboard, upload: Upload, materials: Materials, clusters: Clusters, 'ai-match': AIMatch, analytics: Analytics, audit: AuditLog };
   const PageComponent = pages[page] || Dashboard;
 
   return (

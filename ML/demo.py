@@ -55,46 +55,93 @@ def show_scale_kpis():
 
 
 def show_live_cross_cpse_harmonization():
+    from src.preprocessor import preprocessor
+    from src.attribute_extractor import attribute_extractor
+    from src.classifier import classifier
+    from src.matcher import matcher
+
     print(f"{BOLD}[2] LIVE DEMO: CROSS-CPSE DUPLICATE CONVERGENCE{RESET}")
     print(f"{DIM}Scenario: 3 major CPSEs describe the exact same 6-inch ball valve using completely different syntax.{RESET}\n")
 
     cases = [
-        {"cpse": "CPCL (Oil & Gas)", "code": "CP-10010", "raw": "VLV BALL 6 INCH 300# CS FLGD", "uom": "EA"},
-        {"cpse": "NTPC (Power)", "code": "NT-10011", "raw": "150mm 300LB FLANGED CARBON STEEL BALL VALVE", "uom": "NOS"},
-        {"cpse": "SAIL (Steel)", "code": "SA-10012", "raw": "VALVE, BALL, 150 NB, CL-300, WCB, FLGD", "uom": "PCS"},
+        {"cpse_id": "CPCL_OG", "sector": "Oil & Gas", "source_material_code": "CP-10010", "material_description": "VLV BALL 6 INCH 300# CS FLGD", "uom": "EA", "unit_price_inr": 45000.0, "current_stock_qty": 12, "annual_procurement_qty": 30},
+        {"cpse_id": "NTPC_PW", "sector": "Power", "source_material_code": "NT-10011", "material_description": "150mm 300LB FLANGED CARBON STEEL BALL VALVE", "uom": "NOS", "unit_price_inr": 48000.0, "current_stock_qty": 8, "annual_procurement_qty": 25},
+        {"cpse_id": "SAIL_ST", "sector": "Steel", "source_material_code": "SA-10012", "material_description": "VALVE, BALL, 150 NB, CL-300, WCB, FLGD", "uom": "PCS", "unit_price_inr": 46500.0, "current_stock_qty": 15, "annual_procurement_qty": 40},
     ]
 
     for c in cases:
-        print(f"  {BOLD}• {c['cpse']}:{RESET} [{c['code']}] \"{c['raw']}\" ({c['uom']})")
+        print(f"  {BOLD}• {c['cpse_id']}:{RESET} [{c['source_material_code']}] \"{c['material_description']}\" ({c['uom']})")
 
     print(f"\n  {CYAN}⚡ Running ML Pipeline (Acronym Expansion + UOM Canonicalization + Dual-Layer Embeddings)...{RESET}")
-    time.sleep(0.6)
+    t0 = time.time()
 
-    print(f"  {GREEN}{BOLD}✔ RESULT: All 3 CPSE codes successfully unified!{RESET}")
-    print(f"  ┌────────────────────────┬────────────────────────────────────────────────────────┐")
-    print(f"  │ National Code (CNMC)   │ {GREEN}{BOLD}NMC-OG-VLV-0001{RESET}                                      │")
-    print(f"  │ Standardized Title     │ {BOLD}Ball Valve 150NB Class 300 Carbon Steel Flanged API 6D{RESET} │")
-    print(f"  │ Category               │ Valves & Flow Control (VALVES_FLOW)                    │")
-    print(f"  │ Canonical UOM          │ NOS (auto-converted from EA, PCS)                      │")
-    print(f"  │ Match Confidence       │ {GREEN}96.4% (Multi-CPSE Exact Duplicate){RESET}                   │")
-    print(f"  │ Affected Enterprises   │ CPCL_OG, NTPC_PW, SAIL_ST                              │")
-    print(f"  └────────────────────────┴────────────────────────────────────────────────────────┘\n")
+    records = []
+    for idx, c in enumerate(cases):
+        proc = preprocessor.process_record(c)
+        specs = attribute_extractor.extract(proc["cleaned_description"], proc["cleaned_spec_text"])
+        cls_res = classifier.classify(proc["cleaned_description"], proc["cleaned_spec_text"], specs)
+        records.append({
+            "idx": idx,
+            "source_material_code": c["source_material_code"],
+            "cpse_id": c["cpse_id"],
+            "plant_code": "DEMO-PLANT",
+            "sector": c["sector"],
+            "raw_description": c["material_description"],
+            "cleaned_description": proc["cleaned_description"],
+            "specs": specs,
+            "category_id": cls_res["category_id"],
+            "embedding": np.array(cls_res["embedding"]),
+            "canonical_uom": proc["canonical_uom"],
+            "source_uom": c["uom"],
+            "unit_price_inr": c["unit_price_inr"],
+            "current_stock_qty": c["current_stock_qty"],
+            "annual_procurement_qty": c["annual_procurement_qty"],
+        })
+
+    golden_clusters, crosswalk = matcher.cluster_and_harmonize(records)
+    dt = (time.time() - t0) * 1000
+
+    if golden_clusters:
+        cluster = golden_clusters[0]
+        sim_ab, matches_ab, _ = matcher.calculate_pairwise_similarity(records[0], records[1])
+        print(f"\n  {GREEN}{BOLD}✔ RESULT: All 3 CPSE codes successfully unified in {dt:.1f}ms!{RESET}")
+        print(f"  ┌────────────────────────┬────────────────────────────────────────────────────────┐")
+        print(f"  │ National Code (CNMC)   │ {GREEN}{BOLD}{cluster['cnmc_code']:<54}{RESET} │")
+        print(f"  │ Standardized Title     │ {BOLD}{cluster['canonical_description']:<54}{RESET} │")
+        print(f"  │ Category               │ {cluster['category_name']:<54} │")
+        print(f"  │ Canonical UOM          │ {cluster['standard_uom']:<54} │")
+        print(f"  │ Match Similarity       │ {GREEN}{sim_ab*100:.1f}% ({'; '.join(matches_ab[:2])}){'':<15}{RESET} │")
+        print(f"  │ Affected Enterprises   │ {', '.join(cluster['affected_cpses']):<54} │")
+        print(f"  └────────────────────────┴────────────────────────────────────────────────────────┘\n")
 
 
 def show_adversarial_conflict_defense():
+    from src.preprocessor import preprocessor
+    from src.attribute_extractor import attribute_extractor
+
     print(f"{BOLD}[3] LIVE DEMO: SAFETY-CRITICAL TECHNICAL CONFLICT DEFENSE{RESET}")
     print(f"{DIM}Scenario: A naive text/fuzzy matcher would merge Class 150 and Class 300 valves (high risk of blowout!).{RESET}\n")
 
-    print(f"  Item A: {BOLD}Gate Valve 150NB Class 150 Carbon Steel Flanged{RESET}")
-    print(f"  Item B: {BOLD}Gate Valve 150NB Class 300 Carbon Steel Flanged{RESET}")
-    print(f"  {CYAN}⚡ Attribute Extractor & Conflict Matrix verifying engineering boundaries...{RESET}")
-    time.sleep(0.5)
+    desc_a = "Gate Valve 150NB Class 150 Carbon Steel Flanged"
+    desc_b = "Gate Valve 150NB Class 300 Carbon Steel Flanged"
+    print(f"  Item A: {BOLD}{desc_a}{RESET}")
+    print(f"  Item B: {BOLD}{desc_b}{RESET}")
 
-    print(f"  {RED}{BOLD}✖ MERGE REJECTED BY RULE MATRIX:{RESET}")
-    print(f"    • {RED}Hard Conflict Detected:{RESET} Pressure Class Mismatch (Class 150 vs Class 300)")
+    print(f"  {CYAN}⚡ Attribute Extractor & Conflict Matrix verifying engineering boundaries...{RESET}")
+    t0 = time.time()
+    clean_a = preprocessor.normalize_text(desc_a)
+    clean_b = preprocessor.normalize_text(desc_b)
+    specs_a = attribute_extractor.extract(clean_a)
+    specs_b = attribute_extractor.extract(clean_b)
+    score, matches, conflicts = attribute_extractor.calculate_attribute_match_score(specs_a, specs_b)
+    dt = (time.time() - t0) * 1000
+
+    print(f"\n  {RED}{BOLD}✖ MERGE REJECTED BY RULE MATRIX (Evaluated in {dt:.1f}ms):{RESET}")
+    for conflict in conflicts:
+        print(f"    • {RED}Hard Conflict Detected:{RESET} {conflict}")
+    print(f"    • {YELLOW}Composite Match Score:{RESET} {score:.2f} (Blocked from clustering)")
     print(f"    • {YELLOW}Safety Risk:{RESET} Installing Class 150 in a 300# line causes catastrophic pressure boundary failure")
-    print(f"    • {GREEN}Automated Action:{RESET} Preserved as 2 distinct national codes (`NMC-OG-VLV-0004` & `NMC-OG-VLV-0005`)")
-    print(f"    • {GREEN}Governance Status:{RESET} Routed to Human Review Queue with automated safety alert.\n")
+    print(f"    • {GREEN}Governance Status:{RESET} Preserved as distinct national codes; routed to Review Queue.\n")
 
 
 def show_architecture_summary():

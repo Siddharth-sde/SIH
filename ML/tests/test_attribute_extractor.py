@@ -115,28 +115,32 @@ def test_attribute_extractor_on_400_dataset():
     assert ambiguous_count >= 5
 
 
-class TestAttributeExtractor(unittest.TestCase):
-    def test_standard_and_pressure_extraction(self):
-        test_standard_and_pressure_extraction()
+def test_dirty_and_missing_spec_edge_cases():
+    ext = attribute_extractor
+    # Empty text
+    empty_specs = ext.extract("", "")
+    assert empty_specs.get("is_ambiguous") is True
 
-    def test_bearing_dimension_and_part_number(self):
-        test_bearing_dimension_and_part_number()
+    # Missing text vs complete specs score
+    complete_specs = ext.extract("Gate Valve 150NB Class 150", "API 600")
+    score, matches, conflicts = ext.calculate_attribute_match_score({}, complete_specs)
+    assert score <= 0.5
+    assert len(conflicts) == 0
 
-    def test_electrical_cable_specs(self):
-        test_electrical_cable_specs()
-
-    def test_adversarial_conflict_pressure_class(self):
-        test_adversarial_conflict_pressure_class()
-
-    def test_adversarial_conflict_conductor_material(self):
-        test_adversarial_conflict_conductor_material()
-
-    def test_adversarial_ambiguous_trap(self):
-        test_adversarial_ambiguous_trap()
-
-    def test_attribute_extractor_on_400_dataset(self):
-        test_attribute_extractor_on_400_dataset()
+    # Conflicting pressure class
+    c1 = ext.extract("Gate Valve Class 150")
+    c2 = ext.extract("Gate Valve Class 300")
+    score, matches, conflicts = ext.calculate_attribute_match_score(c1, c2)
+    assert score == 0.0
+    assert any("Pressure Class Conflict" in c for c in conflicts)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.TestSuite()
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            suite.addTest(unittest.FunctionTestCase(obj))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        exit(1)
