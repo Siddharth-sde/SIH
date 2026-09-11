@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { matchSingle } from '../api/api';
 import { Spinner, EmptyState } from '../components/UI';
 import { useToast } from '../components/Toast';
@@ -148,38 +148,45 @@ export default function AIMatch() {
                 </div>
               </div>
 
-              <div className="card-title" style={{ marginBottom: 12 }}>Top {result.top_matches?.length || 0} Matches</div>
-              {result.top_matches?.length === 0 ? (
-                <EmptyState title="No matches found" desc="No CNMC clusters above the similarity threshold. Try a different description." />
-              ) : (
-                result.top_matches?.map((m, i) => (
-                  <div key={i} className="match-result">
-                    <div className="match-result-header">
-                      <div>
-                        <div style={{ fontFamily: 'monospace', color: 'var(--primary)', fontSize: 12 }}>{m.cnmc_code}</div>
-                        <div style={{ fontWeight: 600, fontSize: 13, marginTop: 2 }}>{m.canonical_description}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div className="match-score">{m.match_confidence}%</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>confidence</div>
-                      </div>
-                    </div>
-                    <div className="confidence-bar">
-                      <div className="confidence-fill" style={{ width: `${m.match_confidence}%`, background: m.match_confidence >= 85 ? 'var(--success)' : m.match_confidence >= 70 ? 'var(--warning)' : 'var(--primary)' }} />
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                      <span className={`badge badge-${RELATIONSHIP_COLOR[m.relationship] || 'gray'}`}>{m.relationship}</span>
-                      <span className="badge badge-gray">{m.category}</span>
-                      {m.affected_cpses?.slice(0, 3).map(c => <span key={c} className="badge badge-blue">{c}</span>)}
-                    </div>
-                    {m.reasoning && (
-                      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                        🔍 {m.reasoning}
-                      </div>
+              {(() => {
+                const matchesList = result.top_matches || result.matches || [];
+                return (
+                  <>
+                    <div className="card-title" style={{ marginBottom: 12 }}>Top {matchesList.length} Matches</div>
+                    {matchesList.length === 0 ? (
+                      <EmptyState title="No matches found" desc="No CNMC clusters above the similarity threshold. Try a different description." />
+                    ) : (
+                      matchesList.map((m, i) => (
+                        <div key={i} className="match-result">
+                          <div className="match-result-header">
+                            <div>
+                              <div style={{ fontFamily: 'monospace', color: 'var(--primary)', fontSize: 12 }}>{m.cnmc_code || m.assigned_cnmc}</div>
+                              <div style={{ fontWeight: 600, fontSize: 13, marginTop: 2 }}>{m.canonical_description || m.material_description}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div className="match-score">{m.match_confidence || Math.round((m.similarity_score || 0) * 100)}%</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>confidence</div>
+                            </div>
+                          </div>
+                          <div className="confidence-bar">
+                            <div className="confidence-fill" style={{ width: `${m.match_confidence || Math.round((m.similarity_score || 0) * 100)}%`, background: (m.match_confidence || (m.similarity_score * 100)) >= 85 ? 'var(--success)' : (m.match_confidence || (m.similarity_score * 100)) >= 70 ? 'var(--warning)' : 'var(--primary)' }} />
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                            <span className={`badge badge-${RELATIONSHIP_COLOR[m.relationship] || 'gray'}`}>{m.relationship || 'Match'}</span>
+                            <span className="badge badge-gray">{m.category || 'General'}</span>
+                            {m.affected_cpses?.slice(0, 3).map(c => <span key={c} className="badge badge-blue">{c}</span>)}
+                          </div>
+                          {m.reasoning && (
+                            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                              🔍 {m.reasoning}
+                            </div>
+                          )}
+                        </div>
+                      ))
                     )}
-                  </div>
-                ))
-              )}
+                  </>
+                );
+              })()}
             </div>
           ) : (
             <EmptyState

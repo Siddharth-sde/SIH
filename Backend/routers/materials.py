@@ -10,11 +10,26 @@ from utils import escape_like_string, token_similarity
 
 router = APIRouter(tags=["materials"])
 
+@router.get("/api/materials/meta")
+def get_materials_meta(db: Session = Depends(get_db)):
+    """Returns distinct sectors, CPSEs, and statuses currently populated in the catalog."""
+    sectors = [r[0] for r in db.query(models.MaterialMaster.sector).distinct().all() if r[0]]
+    cpses = [r[0] for r in db.query(models.MaterialMaster.cpse_name).distinct().all() if r[0]]
+    statuses = [r[0] for r in db.query(models.MaterialMaster.status).distinct().all() if r[0]]
+    total = db.query(models.MaterialMaster).count()
+    return {
+        "sectors": sorted(sectors),
+        "cpses": sorted(cpses),
+        "statuses": sorted(statuses),
+        "total": total
+    }
+
 @router.get("/api/materials")
 def get_materials(
     q: Optional[str] = Query(None, description="Search description, code, or CPSE"),
     sector: Optional[str] = Query(None),
     cpse: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     page: Optional[int] = Query(None, ge=1),
     page_size: Optional[int] = Query(None, ge=1, le=500),
     limit: Optional[int] = Query(None, ge=1, le=500),
@@ -44,6 +59,8 @@ def get_materials(
         query = query.filter(models.MaterialMaster.sector == sector)
     if cpse:
         query = query.filter(models.MaterialMaster.cpse_name == cpse)
+    if status:
+        query = query.filter(models.MaterialMaster.status == status)
 
     total = query.count()
     items = query.offset(eff_offset).limit(eff_limit).all()

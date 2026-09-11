@@ -39,6 +39,8 @@ async def lifespan(app: FastAPI):
             candidate_files = [
                 "/app/data/material_crosswalk.csv",
                 "/app/material_crosswalk.csv",
+                "Datasets/genuine_cpse_material_master_10000.csv",
+                "../Datasets/genuine_cpse_material_master_10000.csv",
                 "material_crosswalk.csv",
                 "ML/data/processed/material_crosswalk.csv",
                 "../ML/data/processed/material_crosswalk.csv",

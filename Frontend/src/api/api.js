@@ -62,7 +62,12 @@ export const harmonizeBatch = (file) => {
   return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd }).then(r => r.json());
 };
 
+export const getMaterialsMeta = () =>
+  fetch(`${BACKEND_URL}/api/materials/meta`)
+    .then(r => r.json())
+    .catch(() => ({ sectors: [], cpses: [], statuses: [], total: 0 }));
+
 export const getMLEvaluation = () =>
-  fetch(`${BACKEND_URL.replace(':8000', ':8001')}/api/ml/evaluation`)
+  fetch(`${BACKEND_URL}/api/ml/evaluation`)
     .then(r => (r.ok ? r.json() : null))
     .catch(() => null);

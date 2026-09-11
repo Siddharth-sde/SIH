@@ -177,7 +177,7 @@ def parse_and_store_dataframe(df: pd.DataFrame, db: Session) -> int:
         raw_cnmc = clean_null_bytes(get_val(row, "cnmc_code"))
         if raw_cnmc and raw_cnmc != "PENDING_HARMONIZATION":
             clean_code = raw_cnmc.replace('CLUSTER_', '').strip()
-            cnmc = clean_code if clean_code.startswith("NMC-") else f"NMC-{clean_code}"
+            cnmc = clean_code if (clean_code.startswith("NMC-") or clean_code.startswith("CNMC-")) else f"CNMC-{clean_code}"
         else:
             cnmc = "PENDING_HARMONIZATION"
 
