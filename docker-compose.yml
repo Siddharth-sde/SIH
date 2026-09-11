@@ -13,7 +13,7 @@ services:
     security_opt:
       - "label=disable"
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:11434/ || exit 1"]
+      test: "ollama list || exit 1"
       interval: 10s
       timeout: 5s
       retries: 5
@@ -38,7 +38,7 @@ services:
     extra_hosts:
       - "host.containers.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"]
+      test: "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,7 +65,7 @@ services:
     volumes:
       - sih-data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")' || exit 1"]
+      test: "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")' || exit 1"
       interval: 10s
       timeout: 5s
       retries: 5

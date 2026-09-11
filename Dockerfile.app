@@ -42,13 +42,8 @@ RUN rm -f /etc/nginx/sites-enabled/default
 COPY entrypoint-app.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Create non-root application user and grant directory permissions
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
-    mkdir -p /var/cache/nginx /var/log/nginx /var/run /app/data && \
-    touch /var/run/nginx.pid && \
-    chown -R appuser:appuser /var/cache/nginx /var/log/nginx /var/run /var/run/nginx.pid /usr/share/nginx/html /app /etc/nginx
-
-USER appuser
+# Create data directory for SQLite database storage
+RUN mkdir -p /app/data
 
 EXPOSE 8000 5173
 CMD ["/app/entrypoint.sh"]
