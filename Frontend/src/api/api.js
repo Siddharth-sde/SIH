@@ -61,3 +61,8 @@ export const harmonizeBatch = (file) => {
   fd.append('file', file);
   return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd }).then(r => r.json());
 };
+
+export const getMLEvaluation = () =>
+  fetch(`${BACKEND_URL.replace(':8000', ':8001')}/api/ml/evaluation`)
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);

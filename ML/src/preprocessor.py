@@ -408,6 +408,24 @@ class Stage1Preprocessor:
         final_text = re.sub(r"\s+", " ", expanded).strip().lower()
         return final_text
 
+    @staticmethod
+    def _safe_float(val: Any, default: float = 0.0) -> float:
+        try:
+            if val is None or pd.isna(val):
+                return default
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _safe_int(val: Any, default: int = 0) -> int:
+        try:
+            if val is None or pd.isna(val):
+                return default
+            return int(float(val))
+        except (ValueError, TypeError):
+            return default
+
     def process_record(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Processes a single dictionary / pandas row."""
         raw_desc = str(row.get("material_description", "") or "")
@@ -436,9 +454,9 @@ class Stage1Preprocessor:
             "source_uom": raw_uom,
             "canonical_uom": canonical_uom,
             "uom_category": uom_category,
-            "unit_price_inr": float(row.get("unit_price_inr", 0.0) or 0.0),
-            "current_stock_qty": int(row.get("current_stock_qty", 0) or 0),
-            "annual_procurement_qty": int(row.get("annual_procurement_qty", 0) or 0),
+            "unit_price_inr": self._safe_float(row.get("unit_price_inr"), 0.0),
+            "current_stock_qty": self._safe_int(row.get("current_stock_qty"), 0),
+            "annual_procurement_qty": self._safe_int(row.get("annual_procurement_qty"), 0),
             "bucket": row.get("bucket", "A"),
             "human_review_flag": bool(row.get("human_review_flag", False)),
         }

@@ -8,9 +8,78 @@ import re
 import logging
 from typing import Dict, Any, List, Tuple, Optional, Set
 import numpy as np
-import networkx as nx
-from rapidfuzz import fuzz
 import pandas as pd
+
+try:
+    import networkx as nx
+except ImportError:
+    class SimpleGraph:
+        def __init__(self):
+            self.adj = {}
+            self.nodes = {}
+        def add_node(self, node, **kwargs):
+            self.nodes[node] = kwargs
+            if node not in self.adj:
+                self.adj[node] = set()
+        def add_edge(self, u, v, **kwargs):
+            if u not in self.nodes:
+                self.add_node(u)
+            if v not in self.nodes:
+                self.add_node(v)
+            self.adj[u].add(v)
+            self.adj[v].add(u)
+        def subgraph(self, nodes):
+            sub = SimpleGraph()
+            for n in nodes:
+                sub.add_node(n, **self.nodes.get(n, {}))
+            for n in nodes:
+                for neighbor in self.adj.get(n, []):
+                    if neighbor in nodes:
+                        sub.add_edge(n, neighbor)
+            return sub
+        def number_of_edges(self):
+            return sum(len(neighbors) for neighbors in self.adj.values()) // 2
+
+    class NxFallback:
+        Graph = SimpleGraph
+        @staticmethod
+        def connected_components(G):
+            from collections import deque
+            visited = set()
+            comps = []
+            for node in list(G.nodes.keys()):
+                if node not in visited:
+                    comp = set()
+                    queue = deque([node])
+                    visited.add(node)
+                    while queue:
+                        curr = queue.popleft()
+                        comp.add(curr)
+                        for neighbor in G.adj.get(curr, []):
+                            if neighbor not in visited:
+                                visited.add(neighbor)
+                                queue.append(neighbor)
+                    comps.append(comp)
+            return comps
+        class community:
+            @staticmethod
+            def louvain_communities(subgraph, **kwargs):
+                return NxFallback.connected_components(subgraph)
+
+    nx = NxFallback()
+
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    import difflib
+    class FuzzFallback:
+        @staticmethod
+        def token_set_ratio(s1, s2):
+            return difflib.SequenceMatcher(None, s1, s2).ratio() * 100
+        @staticmethod
+        def ratio(s1, s2):
+            return difflib.SequenceMatcher(None, s1, s2).ratio() * 100
+    fuzz = FuzzFallback()
 
 from src.attribute_extractor import attribute_extractor
 from src.preprocessor import UOMHarmonizer
@@ -404,6 +473,7 @@ class DeduplicationMatcher:
                 "affected_cpses": affected_cpses,
                 "specifications": unified_specs,
                 "member_codes": [m["source_material_code"] for m in members],
+                "member_keys": [(m["source_material_code"], m["cpse_id"]) for m in members],
             }
             golden_clusters.append(cluster_entry)
 
@@ -466,60 +536,83 @@ class DeduplicationMatcher:
     ) -> Dict[str, Any]:
         """
         Evaluates deduplication clustering against ground_truth_clusters.csv.
-        Returns Pairwise Precision, Recall, F1, and Cluster counts.
+        Uses O(N) contingency combinatorics for fast pairwise precision, recall, F1, and ARI.
         """
-        # Map source_material_code + cpse_id to predicted CNMC
+        # Map (source_material_code, cpse_id) to predicted CNMC
         code_to_cnmc = {}
         for c in golden_clusters:
-            for m_code in c["member_codes"]:
-                code_to_cnmc[m_code] = c["cnmc_code"]
+            cnmc = c["cnmc_code"]
+            for m_key in c.get("member_keys", []):
+                code_to_cnmc[m_key] = cnmc
+            for m_code in c.get("member_codes", []):
+                code_to_cnmc.setdefault((m_code, ""), cnmc)
 
         # Merge with ground truth
         gt_map = gt_df.set_index(["source_material_code", "cpse_id"]).to_dict("index")
 
         n = len(records)
-        tp = fp = fn = tn = 0
+        if n < 2:
+            return {"total_items": n, "precision": 1.0, "recall": 1.0, "f1_score": 1.0, "ari": 1.0, "adjusted_rand_index": 1.0}
 
-        for i in range(n):
-            code_i = records[i]["source_material_code"]
-            cpse_i = records[i]["cpse_id"]
-            true_i = gt_map.get((code_i, cpse_i), {}).get("true_cluster_id")
-            canon_i = str(gt_map.get((code_i, cpse_i), {}).get("canonical_name", "")).lower().strip()
-            pred_i = code_to_cnmc.get(code_i)
+        from collections import defaultdict
 
-            for j in range(i + 1, n):
-                code_j = records[j]["source_material_code"]
-                cpse_j = records[j]["cpse_id"]
-                true_j = gt_map.get((code_j, cpse_j), {}).get("true_cluster_id")
-                canon_j = str(gt_map.get((code_j, cpse_j), {}).get("canonical_name", "")).lower().strip()
-                pred_j = code_to_cnmc.get(code_j)
+        pred_labels = []
+        true_labels = []
 
-                same_pred = (pred_i is not None and pred_i == pred_j)
-                same_true = (true_i is not None and true_i == true_j)
+        for r in records:
+            code = r["source_material_code"]
+            cpse = r["cpse_id"]
+            pred = code_to_cnmc.get((code, cpse)) or code_to_cnmc.get((code, "")) or f"UNCLUSTERED_{code}"
+            gt_info = gt_map.get((code, cpse), {})
+            true_id = gt_info.get("true_cluster_id") or f"GT_SINGLETON_{code}_{cpse}"
+            pred_labels.append(pred)
+            true_labels.append(true_id)
 
-                if same_pred and same_true:
-                    tp += 1
-                elif same_pred and not same_true:
-                    fp += 1
-                elif not same_pred and same_true:
-                    fn += 1
-                else:
-                    tn += 1
+        # Fast O(N) contingency table calculation
+        contingency = defaultdict(lambda: defaultdict(int))
+        pred_counts = defaultdict(int)
+        true_counts = defaultdict(int)
+
+        for p_lbl, t_lbl in zip(pred_labels, true_labels):
+            contingency[p_lbl][t_lbl] += 1
+            pred_counts[p_lbl] += 1
+            true_counts[t_lbl] += 1
+
+        def comb2(val: int) -> int:
+            return (val * (val - 1)) // 2 if val > 1 else 0
+
+        # TP: pairs in same predicted cluster and same ground-truth cluster
+        tp = sum(comb2(cnt) for p_dict in contingency.values() for cnt in p_dict.values())
+        sum_pred_comb = sum(comb2(cnt) for cnt in pred_counts.values())
+        sum_true_comb = sum(comb2(cnt) for cnt in true_counts.values())
+
+        # FP: pairs in same predicted cluster but different ground-truth clusters
+        fp = sum_pred_comb - tp
+        # FN: pairs in different predicted clusters but same ground-truth cluster
+        fn = sum_true_comb - tp
+        total_pairs = comb2(n)
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        # Adjusted Rand Index (ARI)
+        expected_index = (sum_pred_comb * sum_true_comb) / total_pairs if total_pairs > 0 else 0.0
+        max_index = 0.5 * (sum_pred_comb + sum_true_comb)
+        ari = (tp - expected_index) / (max_index - expected_index) if (max_index - expected_index) > 0 else 0.0
 
         return {
             "total_items": n,
             "total_golden_clusters": len(golden_clusters),
-            "duplicate_clusters": sum(1 for c in golden_clusters if c["is_duplicate_cluster"]),
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
+            "duplicate_clusters": sum(1 for c in golden_clusters if c.get("is_duplicate_cluster")),
+            "tp": int(tp),
+            "fp": int(fp),
+            "fn": int(fn),
             "precision": round(precision, 4),
             "recall": round(recall, 4),
             "f1_score": round(f1, 4),
+            "ari": round(ari, 4),
+            "adjusted_rand_index": round(ari, 4),
         }
 
 

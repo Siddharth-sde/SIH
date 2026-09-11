@@ -55,10 +55,20 @@ export default function Dashboard() {
     { name: 'Rationalized', value: mlKpis.duplicates_rationalized || 0 },
   ] : [];
 
-  // Financial bar chart
+  // Financial bar chart (Empirical Price Arbitrage & 20% DPE Holding Cost)
   const financeBar = [
-    { name: 'Procurement Savings', value: mlKpis?.estimated_procurement_savings_inr ? parseFloat(mlKpis.estimated_procurement_savings_inr.replace(/[₹,]/g, '')) / 1e7 : (kpis?.potential_procurement_savings_inr ? kpis.potential_procurement_savings_inr / 1e7 : 0) },
-    { name: 'Inventory Savings', value: summary?.total_materials ? (summary.total_materials * 0.001) : (kpis?.potential_inventory_reduction_inr ? kpis.potential_inventory_reduction_inr / 1e7 : 0) },
+    {
+      name: 'PDI Arbitrage Savings',
+      value: kpis?.empirical_arbitrage_savings_inr != null
+        ? kpis.empirical_arbitrage_savings_inr / 1e7
+        : (kpis?.potential_procurement_savings_inr ? kpis.potential_procurement_savings_inr / 1e7 : 0)
+    },
+    {
+      name: 'DPE Holding Cost (20%)',
+      value: kpis?.inventory_holding_cost_inr != null
+        ? kpis.inventory_holding_cost_inr / 1e7
+        : (kpis?.potential_inventory_reduction_inr ? kpis.potential_inventory_reduction_inr / 1e7 : 0)
+    },
   ];
 
   return (

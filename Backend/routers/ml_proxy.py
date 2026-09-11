@@ -56,15 +56,52 @@ async def proxy_ml_kpis():
 
 @router.post("/api/ml/match-single")
 async def proxy_ml_match_single(payload: Dict[str, Any]):
-    """Proxies single item matching request to ML microservice."""
+    """Proxies single item matching request to ML microservice with graceful local fallback."""
+    from utils import clean_null_bytes, token_similarity
+    from database import SessionLocal
+    import models
+
+    desc = clean_null_bytes(payload.get("query_description") or payload.get("query_text") or "")
+    top_k = int(payload.get("top_k", 5))
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{ML_SERVICE_URL}/api/ml/match-single", json=payload)
+            resp = await client.post(
+                f"{ML_SERVICE_URL}/api/ml/match-single",
+                json={
+                    "query_description": desc,
+                    "query_text": desc,
+                    "query_spec_text": payload.get("query_spec_text", ""),
+                    "query_uom": payload.get("query_uom", "NOS"),
+                    "top_k": top_k
+                }
+            )
             if resp.status_code == 200:
                 return resp.json()
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unreachable at {ML_SERVICE_URL}: {str(e)}")
+    except Exception:
+        pass
+
+    # Honest local fallback using token similarity over database materials
+    db = SessionLocal()
+    try:
+        items = db.query(models.MaterialMaster).limit(500).all()
+        scored = []
+        for item in items:
+            sim = token_similarity(desc, item.description or "")
+            if sim > 0.3:
+                scored.append({
+                    "source_material_code": item.material_code,
+                    "material_description": item.description,
+                    "assigned_cnmc": item.cnmc_code,
+                    "similarity_score": round(sim, 4)
+                })
+        scored.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return {
+            "status": "local_fallback_match",
+            "matches": scored[:top_k]
+        }
+    finally:
+        db.close()
 
 @router.post("/api/ml/harmonize-batch")
 async def proxy_ml_harmonize_batch(file: UploadFile = File(...)):

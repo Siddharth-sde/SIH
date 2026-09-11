@@ -4,11 +4,11 @@ import { Spinner, Badge, EmptyState } from '../components/UI';
 import { useToast } from '../components/Toast';
 
 function ClusterCard({ cluster }) {
-  const [open, setOpen] = useState(false);
-  const prices = cluster.materials.map(m => m.unit_price).filter(p => p > 0);
-  const minP = Math.min(...prices);
-  const maxP = Math.max(...prices);
-  const spread = prices.length > 1 ? ((maxP - minP) / minP * 100).toFixed(1) : null;
+  const materials = cluster.materials || [];
+  const prices = materials.map(m => m.unit_price).filter(p => typeof p === 'number' && p > 0);
+  const minP = prices.length > 0 ? Math.min(...prices) : 0;
+  const maxP = prices.length > 0 ? Math.max(...prices) : 0;
+  const spread = (prices.length > 1 && minP > 0) ? (((maxP - minP) / minP) * 100).toFixed(1) : null;
 
   return (
     <div className="cluster-card">
@@ -133,9 +133,12 @@ export default function Clusters() {
           <div className="kpi-icon yellow"><span style={{ fontSize: 20 }}>⚠</span></div>
           <div>
             <div className="kpi-value">{clusterList.filter(c => {
-              const prices = (c.materials || []).map(m => m.unit_price).filter(p => p > 0);
+              const prices = (c.materials || []).map(m => m.unit_price).filter(p => typeof p === 'number' && p > 0);
               if (prices.length < 2) return false;
-              const spread = (Math.max(...prices) - Math.min(...prices)) / Math.min(...prices) * 100;
+              const minP = Math.min(...prices);
+              if (minP <= 0) return false;
+              const maxP = Math.max(...prices);
+              const spread = (maxP - minP) / minP * 100;
               return spread > 10;
             }).length}</div>
             <div className="kpi-label">High Price Spread ({`>`}10%)</div>

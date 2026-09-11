@@ -8,8 +8,14 @@ import logging
 import time
 from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
-from sentence_transformers import SentenceTransformer
-import requests
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+try:
+    import requests
+except ImportError:
+    requests = None
 
 logger = logging.getLogger(__name__)
 

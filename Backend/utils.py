@@ -174,8 +174,12 @@ def parse_and_store_dataframe(df: pd.DataFrame, db: Session) -> int:
         except (ValueError, TypeError):
             annual = 0
 
-        raw_cnmc = get_val(row, "cnmc_code")
-        cnmc = f"NMC-{clean_null_bytes(raw_cnmc).replace('CLUSTER_', '')}" if raw_cnmc else "PENDING_HARMONIZATION"
+        raw_cnmc = clean_null_bytes(get_val(row, "cnmc_code"))
+        if raw_cnmc and raw_cnmc != "PENDING_HARMONIZATION":
+            clean_code = raw_cnmc.replace('CLUSTER_', '').strip()
+            cnmc = clean_code if clean_code.startswith("NMC-") else f"NMC-{clean_code}"
+        else:
+            cnmc = "PENDING_HARMONIZATION"
 
         extra = {}
         for c in unmatched_cols:
