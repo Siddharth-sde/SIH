@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Container 1: Ollama LLM Engine (GPU Passthrough)
   ollama:
@@ -14,6 +12,12 @@ services:
       - "nvidia.com/gpu=all"
     security_opt:
       - "label=disable"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:11434/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # Container 2: ML Harmonization Microservice
   ml-service:
@@ -27,11 +31,18 @@ services:
     environment:
       - OLLAMA_URL=http://ollama:11434
       - LLM_MODEL=qwen2.5:3b
+      - USE_LLM=true
       - SAVINGS_PERCENTAGE=0.08
       - HF_HUB_OFFLINE=1
       - EMBEDDING_MODEL_PATH=/app/models/all-MiniLM-L6-v2
     extra_hosts:
       - "host.containers.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       - ollama
 
@@ -53,8 +64,15 @@ services:
       - "host.containers.internal:host-gateway"
     volumes:
       - sih-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
-      - ml-service
+      ml-service:
+        condition: service_healthy
 
 volumes:
   ollama-storage:

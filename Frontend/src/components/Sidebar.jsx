@@ -1,4 +1,4 @@
-﻿export function Sidebar({ page, setPage, mlOnline, backendOnline }) {
+export function Sidebar({ page, setPage, mlOnline, backendOnline }) {
   const links = [
     { section: 'Overview' },
     { id: 'dashboard', label: 'Dashboard', icon: '▦' },
@@ -10,13 +10,15 @@
     { id: 'ai-match', label: 'AI Matching', icon: '✦' },
     { section: 'Analytics' },
     { id: 'analytics', label: 'Analytics & KPIs', icon: '📊' },
+    { section: 'Governance' },
+    { id: 'audit', label: 'Audit Trail', icon: '📋' },
   ];
 
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
         NMM Platform
-        <span>Smart India Hackathon 2024</span>
+        <span>Smart India Hackathon 2026</span>
       </div>
       {links.map((l, i) =>
         l.section ? (

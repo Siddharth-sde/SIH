@@ -94,19 +94,24 @@ def test_classifier_on_400_dataset():
     assert category_counts.get("VALVES_FLOW", 0) >= 20
 
 
-class TestClassifier(unittest.TestCase):
-    def test_embedding_shape_and_normalization(self):
-        test_embedding_shape_and_normalization()
+def test_empty_and_unseen_text_classification():
+    # Empty description
+    res = classifier.classify("", "")
+    assert res["category_id"] in classifier.category_ids
+    assert len(res["embedding"]) == 384
 
-    def test_category_classification_core_spares(self):
-        test_category_classification_core_spares()
-
-    def test_adversarial_ambiguous_classification(self):
-        test_adversarial_ambiguous_classification()
-
-    def test_classifier_on_400_dataset(self):
-        test_classifier_on_400_dataset()
+    # Ambiguous specs flag
+    res_amb = classifier.classify("RANDOM STRING 123", "", {"is_ambiguous": True})
+    assert res_amb["category_id"] == "MISC_UNCLASSIFIED"
+    assert res_amb["method"] == "triage_rule"
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.TestSuite()
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            suite.addTest(unittest.FunctionTestCase(obj))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        exit(1)

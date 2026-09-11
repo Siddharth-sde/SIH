@@ -190,27 +190,47 @@ def test_clustering_and_evaluation_on_400_dataset():
     print(f"  Recall:             {metrics['recall']:.4f}")
     print(f"  F1 Score:           {metrics['f1_score']:.4f}")
 
-    assert metrics["precision"] >= 0.65
-    assert metrics["recall"] >= 0.90
-    assert metrics["f1_score"] >= 0.75
+    assert metrics["precision"] >= 0.90
+    assert metrics["recall"] >= 0.60
+    assert metrics["f1_score"] >= 0.70
 
 
-class TestMatcher(unittest.TestCase):
-    def test_cnmc_generation(self):
-        test_cnmc_generation()
+def test_single_item_and_empty_records_clustering():
+    m = matcher
+    # Empty records
+    clusters, crosswalk = m.cluster_and_harmonize([])
+    assert clusters == []
+    assert crosswalk == []
 
-    def test_pairwise_similarity_bearing_cluster(self):
-        test_pairwise_similarity_bearing_cluster()
-
-    def test_pairwise_rejection_valve_pressure_conflict(self):
-        test_pairwise_rejection_valve_pressure_conflict()
-
-    def test_iso_bearing_crosswalk(self):
-        test_iso_bearing_crosswalk()
-
-    def test_clustering_and_evaluation_on_400_dataset(self):
-        test_clustering_and_evaluation_on_400_dataset()
+    # Single item
+    single_record = [{
+        "idx": 0,
+        "source_material_code": "SOLO-01",
+        "cpse_id": "TEST_CPSE",
+        "sector": "Power",
+        "raw_description": "Single Unique Spare Part",
+        "cleaned_description": "Single Unique Spare Part",
+        "specs": {},
+        "category_id": "MISC_UNCLASSIFIED",
+        "embedding": np.zeros(384),
+        "canonical_uom": "NOS",
+        "source_uom": "NOS",
+        "unit_price_inr": 1000.0,
+        "current_stock_qty": 5,
+        "annual_procurement_qty": 10,
+    }]
+    clusters, crosswalk = m.cluster_and_harmonize(single_record)
+    assert len(clusters) == 1
+    assert len(crosswalk) == 1
+    assert crosswalk[0]["match_type"] == "UNIQUE_MATERIAL"
 
 
 if __name__ == "__main__":
-    unittest.main()
+    suite = unittest.TestSuite()
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            suite.addTest(unittest.FunctionTestCase(obj))
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        exit(1)

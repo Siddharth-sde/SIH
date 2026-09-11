@@ -43,10 +43,12 @@ class SingleMatchRequest(BaseModel):
     query_spec_text: Optional[str] = ""
     query_uom: Optional[str] = "NOS"
     top_k: Optional[int] = 5
+    use_llm: Optional[bool] = None
 
 
 class BatchHarmonizeRequest(BaseModel):
     items: List[Dict[str, Any]]
+    use_llm: Optional[bool] = None
 
 
 # ---------------- Endpoints ----------------
@@ -57,6 +59,8 @@ def health_check():
         "status": "healthy",
         "engine": "National Material Master ML Engine",
         "embedding_model": "all-MiniLM-L6-v2 (384-d, offline)",
+        "llm_enabled": getattr(pipeline, "use_llm", False),
+        "llm_model": getattr(pipeline.classifier, "llm_model", "qwen2.5:3b"),
         "taxonomy_categories": 18,
         "loaded_golden_clusters": len(pipeline.golden_clusters),
     }
@@ -73,7 +77,8 @@ def match_single(req: SingleMatchRequest):
             query_description=req.query_description,
             query_spec_text=req.query_spec_text or "",
             query_uom=req.query_uom or "NOS",
-            top_k=req.top_k or 5
+            top_k=req.top_k or 5,
+            use_llm=req.use_llm
         )
         return result
     except Exception as e:
@@ -114,6 +119,8 @@ async def harmonize_batch(file: UploadFile = File(...)):
             "kpis": kpis,
             "total_golden_records": len(golden_df),
             "total_crosswalk_records": len(crosswalk_df),
+            "golden_master": golden_df.to_dict(orient="records"),
+            "crosswalk": crosswalk_df.to_dict(orient="records"),
             "golden_sample": golden_df.head(10).to_dict(orient="records"),
             "crosswalk_sample": crosswalk_df.head(10).to_dict(orient="records"),
         }
@@ -150,6 +157,8 @@ def harmonize_batch_json(req: BatchHarmonizeRequest):
             "kpis": kpis,
             "total_golden_records": len(golden_df),
             "total_crosswalk_records": len(crosswalk_df),
+            "golden_master": golden_df.to_dict(orient="records"),
+            "crosswalk": crosswalk_df.to_dict(orient="records"),
             "golden_sample": golden_df.head(10).to_dict(orient="records"),
             "crosswalk_sample": crosswalk_df.head(10).to_dict(orient="records"),
         }

@@ -28,6 +28,12 @@ ENV PYTHONPATH=/app
 ENV HF_HUB_OFFLINE=1
 ENV EMBEDDING_MODEL_PATH=/app/models/all-MiniLM-L6-v2
 
+# Create non-root application user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8001
 
 CMD ["uvicorn", "src.ml_service:app", "--host", "0.0.0.0", "--port", "8001"]

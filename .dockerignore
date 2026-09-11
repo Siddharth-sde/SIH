@@ -1,0 +1,16 @@
+.git
+.gitignore
+Datasets/
+*.csv
+steel_materials.csv
+Frontend/node_modules/
+Frontend/dist/
+ML/material_master_input*.csv
+ML/ground_truth_clusters*
+ML/tests/
+__pycache__/
+*.pyc
+.env
+.venv/
+*.md
+LICENSE

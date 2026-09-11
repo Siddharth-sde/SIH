@@ -1,7 +1,6 @@
 const defaultHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
 const isProxied = typeof window !== 'undefined' && window.location.port === '5173';
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (isProxied ? '' : `http://${defaultHost}:8000`);
-const ML_URL = import.meta.env.VITE_ML_URL || (isProxied ? '' : `http://${defaultHost}:8001`);
 
 // ── Backend APIs ──────────────────────────────────────────────────────────────
 
@@ -39,16 +38,19 @@ export const uploadAndHarmonize = (file) => {
 export const updateMaterialStatus = (id, action) =>
   fetch(`${BACKEND_URL}/api/materials/${id}/action?action=${action}`, { method: 'POST' }).then(r => r.json());
 
-// ── ML Service APIs ───────────────────────────────────────────────────────────
+export const getAuditLogs = (limit = 50) =>
+  fetch(`${BACKEND_URL}/api/audit?limit=${limit}`).then(r => r.json());
+
+// ── ML Service APIs (Routed through Backend Gateway) ──────────────────────────
 
 export const getMLHealth = () =>
-  fetch(`${BACKEND_URL || ML_URL}/api/ml/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
+  fetch(`${BACKEND_URL}/api/ml/health`).then(r => r.json()).catch(() => ({ status: 'unreachable' }));
 
 export const getMLKPIs = () =>
-  fetch(`${ML_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);
+  fetch(`${BACKEND_URL}/api/ml/kpis`).then(r => r.json()).catch(() => null);
 
 export const matchSingle = (payload) =>
-  fetch(`${ML_URL}/api/ml/match-single`, {
+  fetch(`${BACKEND_URL}/api/ml/match-single`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -57,5 +59,5 @@ export const matchSingle = (payload) =>
 export const harmonizeBatch = (file) => {
   const fd = new FormData();
   fd.append('file', file);
-  return fetch(`${ML_URL}/api/ml/harmonize-batch`, { method: 'POST', body: fd }).then(r => r.json());
+  return fetch(`${BACKEND_URL}/api/upload-and-harmonize`, { method: 'POST', body: fd }).then(r => r.json());
 };

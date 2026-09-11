@@ -28,13 +28,16 @@ class MaterialHarmonizationPipeline:
     - Stage 4: Deduplication Graph Clustering & CNMC Code Generation
     """
 
-    def __init__(self, match_threshold: Optional[float] = None, auto_load_catalog: bool = True):
+    def __init__(self, match_threshold: Optional[float] = None, auto_load_catalog: bool = True, use_llm: Optional[bool] = None):
         self.preprocessor = preprocessor
         self.attribute_extractor = attribute_extractor
         self.classifier = classifier
         self.matcher = matcher
         if match_threshold is not None:
             self.matcher.match_threshold = match_threshold
+
+        env_llm = os.getenv("USE_LLM", "true").lower() in ("true", "1", "yes")
+        self.use_llm = use_llm if use_llm is not None else env_llm
 
         self.golden_clusters: List[Dict[str, Any]] = []
         self.crosswalk_records: List[Dict[str, Any]] = []
@@ -63,12 +66,13 @@ class MaterialHarmonizationPipeline:
         ]
 
         # Stage 3: Dual-Layer Vector Classification & Embedding
-        logger.info(f"Executing Stage 3: Vectorized Classification for {len(p_df)} items")
+        logger.info(f"Executing Stage 3: Vectorized Classification for {len(p_df)} items (use_llm={self.use_llm})")
         cls_results = self.classifier.classify_batch(
             p_df["cleaned_description"].tolist(),
             p_df["cleaned_spec_text"].tolist(),
             specs_list,
-            batch_size=256
+            batch_size=256,
+            use_llm=self.use_llm
         )
 
         self.processed_records = []
@@ -220,13 +224,16 @@ class MaterialHarmonizationPipeline:
         query_spec_text: str = "",
         query_uom: str = "NOS",
         top_k: int = 5,
-        query_text: Optional[str] = None
+        query_text: Optional[str] = None,
+        use_llm: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Interactive search matching for AIMatching.jsx:
         Takes raw material description, optional specs and UOM, normalizes, extracts
         attributes, classifies taxonomy, and returns top matching golden records.
         """
+        active_use_llm = self.use_llm if use_llm is None else use_llm
+
         # Backwards compatibility for single string argument
         if query_text and not query_description:
             query_description = query_text
@@ -234,7 +241,7 @@ class MaterialHarmonizationPipeline:
         clean_desc = self.preprocessor.normalize_text(query_description)
         clean_spec = self.preprocessor.normalize_text(query_spec_text)
         query_specs = self.attribute_extractor.extract(clean_desc, clean_spec)
-        cls_result = self.classifier.classify(clean_desc, clean_spec, query_specs)
+        cls_result = self.classifier.classify(clean_desc, clean_spec, query_specs, use_llm=active_use_llm)
         query_emb = np.array(cls_result["embedding"])
 
         canonical_uom, _ = self.preprocessor.uom_harmonizer.canonicalize(query_uom)

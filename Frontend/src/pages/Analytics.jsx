@@ -118,13 +118,13 @@ export default function Analytics() {
       <div className="grid-2" style={{ marginBottom: 24 }}>
         {/* Radar Chart */}
         <div className="card">
-          <div className="card-header"><div className="card-title">🎯 ML Engine Performance</div></div>
+          <div className="card-header"><div className="card-title">🎯 Benchmark Target SLA Metrics (%)</div></div>
           <div style={{ height: 280 }}>
             <ResponsiveContainer>
               <RadarChart data={radarData} cx="50%" cy="50%" outerRadius={100}>
                 <PolarGrid />
                 <PolarAngleAxis dataKey="axis" tick={{ fontSize: 11 }} />
-                <Radar name="Performance" dataKey="value" stroke="#1a56db" fill="#1a56db" fillOpacity={0.25} />
+                <Radar name="Target SLA" dataKey="value" stroke="#1a56db" fill="#1a56db" fillOpacity={0.25} />
                 <Tooltip formatter={v => `${v}%`} />
                 <Legend />
               </RadarChart>

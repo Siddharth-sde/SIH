@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getMaterials, updateMaterialStatus } from '../api/api';
 import { Spinner, StatusBadge, EmptyState } from '../components/UI';
 import { useToast } from '../components/Toast';
@@ -16,10 +16,17 @@ export default function Materials() {
   const toast = useToast();
   const limit = 20;
 
-  const load = useCallback(async (q, sector, offset) => {
+  const [debouncedQ, setDebouncedQ] = useState(q);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(q), 300);
+    return () => clearTimeout(timer);
+  }, [q]);
+
+  const load = useCallback(async (searchQuery, targetSector, targetOffset) => {
     setLoading(true);
     try {
-      const data = await getMaterials({ q, sector, limit, offset });
+      const data = await getMaterials({ q: searchQuery, sector: targetSector, limit, offset: targetOffset });
       setItems(data.items || []);
       setTotal(data.total || 0);
     } catch {
@@ -29,10 +36,38 @@ export default function Materials() {
     }
   }, [toast]);
 
-  useEffect(() => { load(q, sector, offset); }, [q, sector, offset]);
+  useEffect(() => {
+    load(debouncedQ, sector, offset);
+  }, [debouncedQ, sector, offset, load]);
 
   const handleSearch = (e) => { setQ(e.target.value); setOffset(0); };
   const handleSector = (e) => { setSector(e.target.value); setOffset(0); };
+
+  const exportCSV = () => {
+    if (!items.length) {
+      toast('No materials to export', 'warning');
+      return;
+    }
+    const headers = ['material_code', 'description', 'cpse_name', 'sector', 'uom', 'unit_price', 'stock_qty', 'annual_qty', 'cnmc_code', 'status'];
+    const csvContent = [
+      headers.join(','),
+      ...items.map(m =>
+        headers.map(h => {
+          const val = m[h] !== undefined && m[h] !== null ? String(m[h]).replace(/"/g, '""') : '';
+          return `"${val}"`;
+        }).join(',')
+      )
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `materials_export_page_${currentPage}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${items.length} records to CSV`, 'success');
+  };
 
   const handleAction = async (id, action) => {
     try {
@@ -65,7 +100,10 @@ export default function Materials() {
             <option value="">All Sectors</option>
             {SECTORS.map(s => <option key={s}>{s}</option>)}
           </select>
-          <button className="btn btn-primary btn-sm" onClick={() => load(q, sector, offset)}>
+          <button className="btn btn-ghost btn-sm" onClick={exportCSV} title="Export current page to CSV">
+            ⬇ Export CSV
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={() => load(debouncedQ, sector, offset)}>
             Refresh
           </button>
         </div>

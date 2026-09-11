@@ -83,6 +83,36 @@ export default function Clusters() {
   const clusterList = Array.isArray(clusters) ? clusters : [];
   const totalDupes = clusterList.reduce((s, c) => s + (c.total_duplicates ?? c.material_count ?? (c.materials?.length || 0)), 0);
 
+  const exportCSV = () => {
+    if (!clusterList.length) {
+      toast('No clusters to export', 'warning');
+      return;
+    }
+    const headers = ['cnmc_code', 'material_code', 'cpse', 'description', 'uom', 'unit_price', 'stock_qty'];
+    const rows = [];
+    clusterList.forEach(c => {
+      (c.materials || []).forEach(m => {
+        rows.push([
+          `"${c.cnmc}"`,
+          `"${m.code || ''}"`,
+          `"${m.cpse || ''}"`,
+          `"${(m.description || '').replace(/"/g, '""')}"`,
+          `"${m.uom || ''}"`,
+          `"${m.unit_price || 0}"`,
+          `"${m.stock_qty || 0}"`
+        ].join(','));
+      });
+    });
+    const blob = new Blob([headers.join(',') + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clusters_export_${clusterList.length}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${rows.length} items from ${clusterList.length} clusters to CSV`, 'success');
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -120,6 +150,9 @@ export default function Clusters() {
             <select className="input" style={{ width: 120 }} value={limit} onChange={e => setLimit(Number(e.target.value))}>
               {[10, 25, 50, 100].map(n => <option key={n}>{n}</option>)}
             </select>
+            <button className="btn btn-ghost btn-sm" onClick={exportCSV} title="Export clusters to CSV">
+              ⬇ Export CSV
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={() => load(limit)}>↺ Refresh</button>
           </div>
         </div>

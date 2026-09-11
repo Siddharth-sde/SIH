@@ -325,19 +325,51 @@ class DeduplicationMatcher:
     def cluster_and_harmonize(self, records: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Performs full deduplication clustering, CNMC generation, and crosswalk preparation.
+        Uses Louvain community detection on connected components to prevent transitive chaining.
         Returns:
             (golden_clusters, crosswalk_records)
         """
         G = self.build_similarity_graph(records)
         connected_comps = list(nx.connected_components(G))
 
+        # Hybrid clustering: decompose large connected components using Louvain community detection
+        # This prevents transitive chaining (A-B-C-...-Z) from collapsing disparate items into mega-clusters
+        final_communities = []
+        for comp in connected_comps:
+            if len(comp) <= 2:
+                final_communities.append(comp)
+            else:
+                subgraph = G.subgraph(comp)
+                if subgraph.number_of_edges() > 0:
+                    try:
+                        # resolution > 1.0 biases toward tighter, higher-precision communities
+                        comms = nx.community.louvain_communities(
+                            subgraph,
+                            weight="weight",
+                            resolution=1.2,
+                            seed=42
+                        )
+                        final_communities.extend(comms)
+                    except Exception as e:
+                        logger.warning(f"Louvain partitioning failed on component: {e}. Preserving component.")
+                        final_communities.append(comp)
+                else:
+                    final_communities.append(comp)
+
+        # Deterministic sorting of communities
+        final_communities.sort(key=lambda c: (
+            G.nodes[min(c)].get("category_id", "MISC_UNCLASSIFIED"),
+            -len(c),
+            min(c)
+        ))
+
         golden_clusters = []
         crosswalk_records = []
 
         sequence_counters: Dict[str, int] = {}
 
-        for comp in connected_comps:
-            members = [G.nodes[idx] for idx in comp]
+        for comp in final_communities:
+            members = [G.nodes[idx] for idx in sorted(list(comp))]
             first = members[0]
 
             cat_id = first.get("category_id", "MISC_UNCLASSIFIED")
@@ -405,11 +437,13 @@ class DeduplicationMatcher:
                     "source_material_code": m["source_material_code"],
                     "cpse_id": m["cpse_id"],
                     "plant_code": m.get("plant_code", ""),
+                    "sector": m.get("sector", sector),
                     "raw_description": m.get("raw_description", ""),
                     "cleaned_description": m.get("cleaned_description", ""),
                     "cnmc_code": cnmc,
                     "canonical_description": canonical_desc,
                     "category_id": cat_id,
+                    "category_name": TAXONOMY.get(cat_id, {}).get("name", "Unclassified"),
                     "standard_uom": std_uom,
                     "source_uom": raw_uom,
                     "match_type": match_type,
