@@ -65,7 +65,7 @@ async def proxy_ml_match_single(payload: Dict[str, Any]):
     top_k = int(payload.get("top_k", 5))
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{ML_SERVICE_URL}/api/ml/match-single",
                 json={

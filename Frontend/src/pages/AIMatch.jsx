@@ -13,14 +13,16 @@ const SAMPLE_QUERIES = [
   'Gate Valve 150NB Class 150 Carbon Steel Flanged API 600',
   'SPH ROLLER BRG Bearing 22220',
   'Deep Groove Ball Bearing 25x52x15mm Rubber Sealed',
-  'Induction Motor 30kW 4P TEFC 415V IE3',
-  'XLPE Cable 3C 70 sqmm Aluminium Armoured',
+  'Moulded Case Circuit Breaker 400A 3P 415V 50kA IEC 60947',
+  'XLPE Cable 4C 50 sqmm Aluminium Armoured 1.1kV',
+  'Spiral Wound Gasket 4 Inch Class 150# SS304 Graphite ASME B16.20',
+  'Hex Head Bolt High Tensile M20 x 65mm Grade 8.8 Galvanized',
 ];
 
 export default function AIMatch() {
   const [query, setQuery] = useState('');
   const [specText, setSpecText] = useState('');
-  const [uom, setUom] = useState('NOS');
+  const [uom, setUom] = useState('');
   const [topK, setTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -79,8 +81,8 @@ export default function AIMatch() {
 
           <div className="input-row" style={{ marginBottom: 16 }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>UOM</label>
-              <input className="input" value={uom} onChange={e => setUom(e.target.value)} placeholder="NOS, MTR, KG…" />
+              <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>UOM (optional)</label>
+              <input className="input" value={uom} onChange={e => setUom(e.target.value)} placeholder="e.g. NOS, MTR, KG…" />
             </div>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Top K Results</label>

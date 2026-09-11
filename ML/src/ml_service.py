@@ -98,6 +98,21 @@ def match_single(req: SingleMatchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/ml/reload-catalog")
+def reload_catalog():
+    """Reloads precomputed golden clusters and vector embeddings index into memory."""
+    try:
+        ok = pipeline.load_existing_catalog()
+        return {
+            "status": "success" if ok else "failed",
+            "loaded_clusters": len(pipeline.golden_clusters),
+            "vector_index_active": pipeline._catalog_embeddings is not None
+        }
+    except Exception as e:
+        logger.error(f"Error reloading catalog: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/ml/harmonize-batch")
 async def harmonize_batch(file: UploadFile = File(...)):
     """
