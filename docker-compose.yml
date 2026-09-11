@@ -12,6 +12,8 @@ services:
       - "nvidia.com/gpu=all"
     security_opt:
       - "label=disable"
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     healthcheck:
       test: "ollama list || exit 1"
       interval: 10s

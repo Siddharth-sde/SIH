@@ -428,7 +428,8 @@ class DualLayerClassifier:
                     "messages": [{"role": "user", "content": prompt}],
                     "format": "json",
                     "stream": False,
-                    "options": {"temperature": 0.0}
+                    "options": {"temperature": 0.0},
+                    "keep_alive": -1
                 },
                 timeout=3.0
             )

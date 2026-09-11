@@ -12,11 +12,11 @@ echo "  2. ml-service (ML Engine - Port 8001)"
 echo "  3. app (Backend + Frontend Host - Ports 8000 & 5173)"
 echo "=================================================="
 
-# Detect compose tool
-if podman compose version >/dev/null 2>&1; then
+# Detect compose tool (prefer podman-compose --in-pod 0 to avoid systemd cgroup issues)
+if command -v podman-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="podman-compose --in-pod 0"
+elif podman compose version >/dev/null 2>&1; then
     COMPOSE_CMD="podman compose"
-elif command -v podman-compose >/dev/null 2>&1; then
-    COMPOSE_CMD="podman-compose"
 elif command -v docker-compose >/dev/null 2>&1; then
     COMPOSE_CMD="docker-compose"
 else
